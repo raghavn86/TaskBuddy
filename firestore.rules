@@ -1,0 +1,127 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Allow authenticated users to read and write to their own data
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Partnerships rules - allow users to access partnerships they're part of
+    match /partnerships/{partnershipId} {
+      // Allow reading a partnership if the user is part of it or was invited
+      allow read: if request.auth != null && 
+        (resource.data.createdBy == request.auth.uid || 
+         request.auth.uid in resource.data.partners || 
+         resource.data.invitedEmail == request.auth.token.email);
+      
+      // Allow updating a partnership if:
+      // 1. The user is the creator, or
+      // 2. The user is already in the partners list, or
+      // 3. The user is the invitee (to accept invitations)
+      allow update: if request.auth != null && 
+        (resource.data.createdBy == request.auth.uid || 
+         request.auth.uid in resource.data.partners || 
+         resource.data.invitedEmail == request.auth.token.email);
+      
+      // Allow partnership creation for authenticated users
+      allow create: if request.auth != null;
+    }
+    
+    // Partnership invites rules - allow users to access invites sent to their email
+    match /partnershipInvites/{inviteId} {
+      // Allow reading an invite if it's for the user's email
+      allow read: if request.auth != null && 
+        (resource.data.inviteeEmail == request.auth.token.email ||
+         resource.data.inviterEmail == request.auth.token.email);
+      
+      // Allow updating an invite if it's for the user's email
+      allow update: if request.auth != null && 
+        (resource.data.inviteeEmail == request.auth.token.email ||
+         resource.data.inviterEmail == request.auth.token.email);
+      
+      // Allow invite creation for authenticated users
+      allow create: if request.auth != null;
+    }
+
+    // V1 Templates rules - allow users to read/write templates they created or collaborate on
+    match /templates/{templateId} {
+      // Allow users to list templates - we'll filter by partnership in the application code
+      allow list: if request.auth != null;
+      
+      // Allow reading a template if user is creator or a collaborator or from the same partnership
+      allow get: if request.auth != null && 
+        (resource.data.createdBy == request.auth.uid || 
+         request.auth.uid in resource.data.collaborators ||
+         partnershipHasUser(resource.data.partnershipId, request.auth.uid));
+      
+      // Allow template creation for authenticated users
+      allow create: if request.auth != null;
+      
+      // Allow updates if user is creator or collaborator or from the same partnership
+      // This is critical for adding tasks and other operations
+      allow update, delete: if request.auth != null && 
+        (resource.data.createdBy == request.auth.uid || 
+         request.auth.uid in resource.data.collaborators ||
+         partnershipHasUser(resource.data.partnershipId, request.auth.uid));
+    }
+
+    // V1 Execution plans rules - allow users to access their execution plans
+    match /executionPlans/{planId} {
+      // Allow users to list execution plans - we'll filter by partnership in the application code
+      allow list: if request.auth != null;
+      
+      // Allow reading an execution plan if user is creator or a collaborator or from the same partnership
+      allow get: if request.auth != null && 
+        (resource.data.createdBy == request.auth.uid || 
+         request.auth.uid in resource.data.collaborators ||
+         partnershipHasUser(resource.data.partnershipId, request.auth.uid));
+      
+      // Allow plan creation for authenticated users
+      allow create: if request.auth != null;
+      
+      // Allow updates if user is creator or collaborator or from the same partnership
+      // This is critical for adding tasks and other operations
+      allow update, delete: if request.auth != null && 
+        (resource.data.createdBy == request.auth.uid || 
+         request.auth.uid in resource.data.collaborators ||
+         partnershipHasUser(resource.data.partnershipId, request.auth.uid));
+    }
+
+
+
+    // Action history rules
+    match /actionHistory/{actionId} {
+      allow read, write: if request.auth != null;
+    }
+
+    // Activity logs rules - allow users to access activity logs for their execution plans
+    match /activityLogs/{activityId} {
+      allow read, write: if request.auth != null;
+    }
+    
+    // Categories rules - allow users to access categories for their partnerships
+    match /categories/{categoryId} {
+      // Allow reading a category if user is part of the partnership
+      allow read: if request.auth != null && 
+        partnershipHasUser(resource.data.partnershipId, request.auth.uid);
+      
+      // Allow category creation for authenticated users (with partnership validation)
+      allow create: if request.auth != null && 
+        partnershipHasUser(request.resource.data.partnershipId, request.auth.uid);
+      
+      // Allow updates/deletes if user is part of the partnership
+      allow update, delete: if request.auth != null && 
+        partnershipHasUser(resource.data.partnershipId, request.auth.uid);
+    }
+    
+    // Helper function to check if a user is part of a partnership
+    function partnershipHasUser(partnershipId, userId) {
+      // Check if partnership ID is valid
+      return partnershipId != null && 
+        exists(/databases/$(database)/documents/partnerships/$(partnershipId)) && 
+        ((get(/databases/$(database)/documents/partnerships/$(partnershipId)).data.createdBy == userId) || 
+         (userId in get(/databases/$(database)/documents/partnerships/$(partnershipId)).data.partners));
+    }
+  }
+}

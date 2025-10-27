@@ -1,0 +1,13 @@
+{/* Delete Plan Confirmation Dialog */}
+<Dialog open={deleteDialogOpen} onClose={handleDeleteDialogClose} maxWidth="sm">
+  <DialogTitle>Delete Execution Plan</DialogTitle>
+  <DialogContent>
+    <Typography>Are you sure you want to delete this execution plan? This action cannot be undone.</Typography>
+  </DialogContent>
+  <DialogActions>
+    <Button onClick={handleDeleteDialogClose}>Cancel</Button>
+    <Button onClick={handlePlanDelete} variant="contained" color="error">
+      Delete
+    </Button>
+  </DialogActions>
+</Dialog>

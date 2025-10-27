@@ -1,0 +1,48 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  width: 100%;
+}
+
+body {
+  font-family: 'Roboto', 'Helvetica', 'Arial', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #f5f5f5;
+}
+
+#root {
+  min-height: 100%;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow-x: hidden; /* Prevent horizontal overflow */
+}
+
+/* Add explicit class to fix mobile padding issues */
+.main-content {
+  padding-bottom: 72px !important; 
+  flex: 1 1 auto !important;
+  overflow: auto !important;
+}
+
+@media (max-width: 600px) {
+  .main-content {
+    padding-bottom: 72px !important;
+  }
+}
+
+.task-dragging {
+  background-color: rgba(25, 118, 210, 0.08);
+  border: 1px dashed #1976d2;
+}
+
+.task-drag-over {
+  background-color: rgba(25, 118, 210, 0.05);
+  border: 2px dashed #1976d2;
+}
