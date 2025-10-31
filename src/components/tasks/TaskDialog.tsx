@@ -19,6 +19,9 @@ import {
   FormControlLabel,
   ToggleButton,
   ToggleButtonGroup,
+  Snackbar,
+  Alert,
+  CircularProgress,
 } from '@mui/material';
 import { Close as CloseIcon } from '@mui/icons-material';
 import { Task, TaskCategory } from '../../types';
@@ -29,9 +32,9 @@ type TaskDialogProps = {
   open: boolean;
   onClose: () => void;
   task?: Task;
-  onAddTask: (task: Omit<Task, 'id' | 'createdAt' | 'updatedAt'>, selectedDays?: number[]) => void;
-  onUpdateTask: (taskId: string, updates: Partial<Task>) => void;
-  onMoveTaskBetweenDays?: (sourceDayOfWeek: number, targetDayOfWeek: number, oldIndex: number, newIndex: number, taskId: string, newAssignedTo?: string | null) => void;
+  onAddTask: (task: Omit<Task, 'id' | 'createdAt' | 'updatedAt'>, selectedDays?: number[]) => void | Promise<void>;
+  onUpdateTask: (taskId: string, updates: Partial<Task>) => void | Promise<void>;
+  onMoveTaskBetweenDays?: (sourceDayOfWeek: number, targetDayOfWeek: number, oldIndex: number, newIndex: number, taskId: string, newAssignedTo?: string | null) => void | Promise<void>;
   dialogTitle?: string;
   isWeekView?: boolean;
   currentDayIndex?: number;
@@ -61,6 +64,9 @@ const TaskDialog: React.FC<TaskDialogProps> = ({
   const [categoryId, setCategoryId] = useState<string>('');
   const [errors, setErrors] = useState<{ title?: string; minutes?: string }>({});
   const [selectedDays, setSelectedDays] = useState<number[]>([0, 1, 2, 3, 4, 5, 6]); // Default to all days selected
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [showSuccess, setShowSuccess] = useState(false);
   
   const weekDays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   
@@ -79,6 +85,9 @@ const TaskDialog: React.FC<TaskDialogProps> = ({
       setSelectedDays([currentDayIndex]); // Default to current day
     }
     setErrors({});
+    setSaveError(null);
+    setIsSaving(false);
+    setShowSuccess(false);
   }, [task, open, currentDayIndex]);
   
   const handleTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -112,50 +121,66 @@ const TaskDialog: React.FC<TaskDialogProps> = ({
     }
   };
   
-  const handleSave = () => {
+  const handleSave = async () => {
     // Validate inputs
     const newErrors: { title?: string; minutes?: string } = {};
-    
+
     if (!title.trim()) {
       newErrors.title = 'Title is required';
     }
-    
+
     const minutesNum = parseInt(minutes);
     if (isNaN(minutesNum) || minutesNum <= 0) {
       newErrors.minutes = 'Minutes must be a positive number';
     }
-    
+
     if (Object.keys(newErrors).length > 0) {
       setErrors(newErrors);
       return;
     }
-    
+
     const taskData = {
       title: title.trim(),
       minutes: minutesNum,
       assignedTo,
-      categoryId: categoryId || undefined,
+      categoryId,
       completed: task?.completed || false,
     };
-    
-    if (task) {
-      // Editing existing task
-      const newDay = selectedDays[0];
-      
-      // If day changed and we have the move function, move the task
-      if (newDay !== currentDayIndex && onMoveTaskBetweenDays) {
-        const taskIndex = tasks.findIndex(t => t.id === task.id);
-        onMoveTaskBetweenDays(currentDayIndex, newDay, taskIndex, 0, task.id);
+
+    setIsSaving(true);
+    setSaveError(null);
+
+    try {
+      if (task) {
+        // Editing existing task
+        const newDay = selectedDays[0];
+
+        // If day changed and we have the move function, move the task
+        if (newDay !== currentDayIndex && onMoveTaskBetweenDays) {
+          const taskIndex = tasks.findIndex(t => t.id === task.id);
+          await onMoveTaskBetweenDays(currentDayIndex, newDay, taskIndex, 0, task.id);
+        }
+
+        // Update task data
+        await onUpdateTask(task.id, taskData);
+      } else {
+        // Adding new task
+        await onAddTask(taskData, selectedDays);
       }
-      
-      // Update task data
-      onUpdateTask(task.id, taskData);
-    } else {
-      // Adding new task
-      onAddTask(taskData, selectedDays);
+
+      // Show success message briefly
+      setShowSuccess(true);
+
+      // Close dialog after a short delay to show success
+      setTimeout(() => {
+        onClose();
+      }, 1500);
+
+    } catch (error) {
+      console.error('Error saving task:', error);
+      setSaveError(error instanceof Error ? error.message : 'Failed to save task. Please try again.');
+      setIsSaving(false);
     }
-    
-    onClose();
   };
   
   return (
@@ -255,11 +280,41 @@ const TaskDialog: React.FC<TaskDialogProps> = ({
       </DialogContent>
       
       <DialogActions sx={{ p: 2 }}>
-        <Button onClick={onClose}>Cancel</Button>
-        <Button onClick={handleSave} variant="contained" color="primary">
-          {task ? 'Update' : 'Add'} Task
+        <Button onClick={onClose} disabled={isSaving}>Cancel</Button>
+        <Button
+          onClick={handleSave}
+          variant="contained"
+          color="primary"
+          disabled={isSaving}
+          startIcon={isSaving ? <CircularProgress size={20} color="inherit" /> : null}
+        >
+          {isSaving ? 'Saving...' : task ? 'Update' : 'Add'} {!isSaving && 'Task'}
         </Button>
       </DialogActions>
+
+      {/* Error Snackbar */}
+      <Snackbar
+        open={!!saveError}
+        autoHideDuration={6000}
+        onClose={() => setSaveError(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert onClose={() => setSaveError(null)} severity="error" sx={{ width: '100%' }}>
+          {saveError}
+        </Alert>
+      </Snackbar>
+
+      {/* Success Snackbar */}
+      <Snackbar
+        open={showSuccess}
+        autoHideDuration={2000}
+        onClose={() => setShowSuccess(false)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert onClose={() => setShowSuccess(false)} severity="success" sx={{ width: '100%' }}>
+          Task {task ? 'updated' : 'added'} successfully!
+        </Alert>
+      </Snackbar>
     </Dialog>
   );
 };
