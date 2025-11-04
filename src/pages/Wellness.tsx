@@ -76,6 +76,8 @@ const Wellness: React.FC = () => {
   const [editingTask, setEditingTask] = useState<DisplayWellnessTask | null>(null);
   const [editSeries, setEditSeries] = useState(false);
   const dateInputRef = useRef<HTMLInputElement>(null);
+  const [loadingTaskIds, setLoadingTaskIds] = useState<Set<string>>(new Set());
+  const [isDragging, setIsDragging] = useState(false);
 
   // Drag and drop sensors
   const mouseSensor = useSensor(MouseSensor, {
@@ -150,9 +152,35 @@ const Wellness: React.FC = () => {
     setTaskDialogOpen(false);
   };
 
+  // Helper function to add a task to loading state
+  const addLoadingTask = (taskId: string) => {
+    setLoadingTaskIds(prev => new Set(prev).add(taskId));
+  };
+
+  // Helper function to remove a task from loading state
+  const removeLoadingTask = (taskId: string) => {
+    setLoadingTaskIds(prev => {
+      const next = new Set(prev);
+      next.delete(taskId);
+      return next;
+    });
+  };
+
+  // Handle task completion toggle with localized loading
+  const handleToggleComplete = async (task: DisplayWellnessTask) => {
+    addLoadingTask(task.id);
+    try {
+      await toggleTaskCompletion(task);
+    } finally {
+      removeLoadingTask(task.id);
+    }
+  };
+
   // Drag and drop
-  const handleDragEnd = (event: DragEndEvent) => {
+  const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
+
+    setIsDragging(false);
 
     if (!over || active.id === over.id) {
       return;
@@ -163,8 +191,20 @@ const Wellness: React.FC = () => {
 
     if (oldIndex !== -1 && newIndex !== -1) {
       const reordered = arrayMove(tasks, oldIndex, newIndex);
-      reorderTasks(reordered);
+      const draggedTaskId = active.id as string;
+
+      // Show loading state on the dragged task
+      addLoadingTask(draggedTaskId);
+      try {
+        await reorderTasks(reordered);
+      } finally {
+        removeLoadingTask(draggedTaskId);
+      }
     }
+  };
+
+  const handleDragStart = () => {
+    setIsDragging(true);
   };
 
   // Date picker - clicking on date opens the native date picker
@@ -254,6 +294,7 @@ const Wellness: React.FC = () => {
             sensors={sensors}
             collisionDetection={closestCenter}
             onDragEnd={handleDragEnd}
+            onDragStart={handleDragStart}
           >
             <SortableContext
               items={tasks.map(t => t.id)}
@@ -266,7 +307,9 @@ const Wellness: React.FC = () => {
                   categories={categories}
                   onEdit={(editSeriesMode) => handleEditTask(task, editSeriesMode)}
                   onDelete={(deleteSeries) => handleDeleteTask(task, deleteSeries)}
-                  onToggleComplete={() => toggleTaskCompletion(task)}
+                  onToggleComplete={() => handleToggleComplete(task)}
+                  isLoading={loadingTaskIds.has(task.id)}
+                  isAnyTaskLoading={loadingTaskIds.size > 0 || isDragging}
                 />
               ))}
             </SortableContext>

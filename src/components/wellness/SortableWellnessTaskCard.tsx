@@ -10,6 +10,8 @@ type SortableWellnessTaskCardProps = {
   onEdit: (editSeries: boolean) => void;
   onDelete: (deleteSeries: boolean) => void;
   onToggleComplete: () => void;
+  isLoading?: boolean;
+  isAnyTaskLoading?: boolean;
 };
 
 const SortableWellnessTaskCard: React.FC<SortableWellnessTaskCardProps> = (props) => {
@@ -25,6 +27,7 @@ const SortableWellnessTaskCard: React.FC<SortableWellnessTaskCardProps> = (props
     data: {
       task: props.task,
     },
+    disabled: props.isAnyTaskLoading || false,
   });
 
   const style = {
@@ -40,11 +43,13 @@ const SortableWellnessTaskCard: React.FC<SortableWellnessTaskCardProps> = (props
       ref={setNodeRef}
       style={style}
       {...attributes}
-      {...listeners}
+      {...(props.isAnyTaskLoading ? {} : listeners)}
     >
       <WellnessTaskCard
         {...props}
         isDragging={isDragging}
+        isLoading={props.isLoading}
+        isAnyTaskLoading={props.isAnyTaskLoading}
       />
     </div>
   );

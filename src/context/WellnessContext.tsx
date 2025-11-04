@@ -364,6 +364,26 @@ export const WellnessProvider: React.FC<WellnessProviderProps> = ({ children }) 
   );
 
   // Feeling/State Actions
+  const loadFeelingEntries = useCallback(
+    async (startDate?: string, endDate?: string) => {
+      if (!currentUser || !activePartnership) return;
+
+      try {
+        const entries = await getFeelingEntries(
+          currentUser.uid,
+          activePartnership.id,
+          startDate,
+          endDate
+        );
+        setFeelingEntries(entries);
+      } catch (err) {
+        console.error('Error loading feeling entries:', err);
+        setError('Failed to load feeling entries');
+      }
+    },
+    [currentUser, activePartnership]
+  );
+
   const addFeelingEntry = useCallback(
     async (
       feeling: FeelingType,
@@ -384,29 +404,13 @@ export const WellnessProvider: React.FC<WellnessProviderProps> = ({ children }) 
       });
 
       setLatestFeeling(newEntry);
+
+      // Auto-reload feeling entries to update the graph
+      await loadFeelingEntries();
+
       return newEntry;
     },
-    [currentUser, activePartnership, currentDate]
-  );
-
-  const loadFeelingEntries = useCallback(
-    async (startDate?: string, endDate?: string) => {
-      if (!currentUser || !activePartnership) return;
-
-      try {
-        const entries = await getFeelingEntries(
-          currentUser.uid,
-          activePartnership.id,
-          startDate,
-          endDate
-        );
-        setFeelingEntries(entries);
-      } catch (err) {
-        console.error('Error loading feeling entries:', err);
-        setError('Failed to load feeling entries');
-      }
-    },
-    [currentUser, activePartnership]
+    [currentUser, activePartnership, currentDate, loadFeelingEntries]
   );
 
   const refreshLatestFeeling = useCallback(async () => {

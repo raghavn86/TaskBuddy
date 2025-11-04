@@ -10,6 +10,7 @@ import {
   Typography,
   Chip,
   Divider,
+  CircularProgress,
 } from '@mui/material';
 import {
   MoreVert as MoreVertIcon,
@@ -27,6 +28,8 @@ type WellnessTaskCardProps = {
   onDelete: (deleteSeries: boolean) => void;
   onToggleComplete: () => void;
   isDragging?: boolean;
+  isLoading?: boolean;
+  isAnyTaskLoading?: boolean;
 };
 
 const WellnessTaskCard: React.FC<WellnessTaskCardProps> = ({
@@ -36,6 +39,8 @@ const WellnessTaskCard: React.FC<WellnessTaskCardProps> = ({
   onDelete,
   onToggleComplete,
   isDragging = false,
+  isLoading = false,
+  isAnyTaskLoading = false,
 }) => {
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
 
@@ -43,6 +48,7 @@ const WellnessTaskCard: React.FC<WellnessTaskCardProps> = ({
   const categoryColor = getCategoryColor(task.categoryId, categories);
 
   const handleMenuOpen = (event: React.MouseEvent<HTMLButtonElement>) => {
+    if (isAnyTaskLoading) return;
     event.stopPropagation();
     event.preventDefault();
     setAnchorEl(event.currentTarget);
@@ -73,6 +79,7 @@ const WellnessTaskCard: React.FC<WellnessTaskCardProps> = ({
   };
 
   const handleToggleComplete = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (isAnyTaskLoading) return;
     event.stopPropagation();
     onToggleComplete();
   };
@@ -94,21 +101,27 @@ const WellnessTaskCard: React.FC<WellnessTaskCardProps> = ({
           boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
         },
         minHeight: '36px',
-        cursor: 'grab',
+        cursor: isAnyTaskLoading ? 'default' : 'grab',
         '&:active': {
-          cursor: 'grabbing',
+          cursor: isAnyTaskLoading ? 'default' : 'grabbing',
         },
+        pointerEvents: isAnyTaskLoading && !isLoading ? 'none' : 'auto',
       }}
     >
-      {/* Checkbox for completion */}
+      {/* Checkbox for completion or loading spinner */}
       <Box onClick={(e) => e.stopPropagation()}>
-        <Checkbox
-          size="small"
-          checked={task.completed}
-          onChange={handleToggleComplete}
-          onClick={(e) => e.stopPropagation()}
-          sx={{ p: 0.5 }}
-        />
+        {isLoading ? (
+          <CircularProgress size={20} sx={{ m: 0.5 }} />
+        ) : (
+          <Checkbox
+            size="small"
+            checked={task.completed}
+            onChange={handleToggleComplete}
+            onClick={(e) => e.stopPropagation()}
+            sx={{ p: 0.5 }}
+            disabled={isAnyTaskLoading}
+          />
+        )}
       </Box>
 
       {/* Task title and info */}
@@ -175,6 +188,7 @@ const WellnessTaskCard: React.FC<WellnessTaskCardProps> = ({
             handleMenuOpen(e);
           }}
           sx={{ p: 0.5 }}
+          disabled={isAnyTaskLoading}
         >
           <MoreVertIcon fontSize="small" />
         </IconButton>
