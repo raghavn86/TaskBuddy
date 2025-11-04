@@ -23,15 +23,16 @@ import {
   useMediaQuery,
   useTheme,
 } from '@mui/material';
-import { 
-  Dashboard as DashboardIcon, 
-  ViewWeek as ViewWeekIcon, 
+import {
+  Dashboard as DashboardIcon,
+  ViewWeek as ViewWeekIcon,
   Analytics as AnalyticsIcon,
   History as HistoryIcon,
   ExitToApp as LogoutIcon,
   Menu as MenuIcon,
   AccountCircle,
   ArrowBack as ArrowBackIcon,
+  FavoriteBorder as WellnessIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../../context/AuthContext';
 import { usePartnership } from '../../context/PartnershipContext';
@@ -53,8 +54,9 @@ const AppLayout: React.FC = () => {
     const path = location.pathname;
     if (path.startsWith('/templates')) return 0;
     if (path.startsWith('/plans')) return 1;
-    if (path.startsWith('/analytics')) return 2;
-    if (path.startsWith('/logs')) return 3;
+    if (path.startsWith('/wellness')) return 2;
+    if (path.startsWith('/analytics')) return 3;
+    if (path.startsWith('/logs')) return 4;
     return 0;
   });
 
@@ -62,11 +64,12 @@ const AppLayout: React.FC = () => {
   React.useEffect(() => {
     const path = location.pathname;
 
-    
+
     if (path.startsWith('/templates')) setMobileNav(0);
     else if (path.startsWith('/plans')) setMobileNav(1);
-    else if (path.startsWith('/analytics')) setMobileNav(2);
-    else if (path.startsWith('/logs')) setMobileNav(3);
+    else if (path.startsWith('/wellness')) setMobileNav(2);
+    else if (path.startsWith('/analytics')) setMobileNav(3);
+    else if (path.startsWith('/logs')) setMobileNav(4);
   }, [location.pathname, mobileNav]);
   
   const handleDrawerToggle = () => {
@@ -91,6 +94,7 @@ const AppLayout: React.FC = () => {
     { path: '/partnerships', label: 'Partnerships', icon: <ViewWeekIcon /> },
     { path: '/templates', label: 'Templates', icon: <DashboardIcon /> },
     { path: '/plans', label: 'Execution Plans', icon: <ViewWeekIcon /> },
+    { path: '/wellness', label: 'Wellness', icon: <WellnessIcon /> },
     { path: '/analytics', label: 'Analytics', icon: <AnalyticsIcon /> },
     { path: '/logs', label: 'Logs', icon: <HistoryIcon /> },
   ];
@@ -139,9 +143,12 @@ const AppLayout: React.FC = () => {
         navigate('/plans');
         break;
       case 2:
-        navigate('/analytics');
+        navigate('/wellness');
         break;
       case 3:
+        navigate('/analytics');
+        break;
+      case 4:
         navigate('/logs');
         break;
     }
@@ -312,6 +319,7 @@ const AppLayout: React.FC = () => {
           >
             <BottomNavigationAction label="Templates" icon={<DashboardIcon />} />
             <BottomNavigationAction label="Plans" icon={<ViewWeekIcon />} />
+            <BottomNavigationAction label="Wellness" icon={<WellnessIcon />} />
             <BottomNavigationAction label="Analytics" icon={<AnalyticsIcon />} />
             <BottomNavigationAction label="Logs" icon={<HistoryIcon />} />
           </BottomNavigation>
