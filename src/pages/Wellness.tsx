@@ -108,13 +108,28 @@ const Wellness: React.FC = () => {
 
   const handleDeleteTask = async (task: DisplayWellnessTask, deleteSeries: boolean) => {
     if (deleteSeries) {
-      if (window.confirm('Delete this entire task series?')) {
-        await deleteTaskSeries(task.seriesId);
+      if (window.confirm('Delete this entire task series? Past instances will be hidden and future occurrences will be removed.')) {
+        addLoadingTask(task.id);
+        try {
+          await deleteTaskSeries(task.seriesId);
+        } finally {
+          removeLoadingTask(task.id);
+        }
       }
     } else {
-      if (window.confirm('Delete this task instance?')) {
-        if (task.isInstance) {
-          alert('To delete an instance, edit the task and mark it as complete or use the series delete.');
+      if (window.confirm('Hide this task for today?')) {
+        addLoadingTask(task.id);
+        try {
+          // Delete this instance by marking it as deleted
+          if (task.isInstance) {
+            // Update existing instance to mark as deleted
+            await editTaskInstance(task, { deleted: true });
+          } else {
+            // Create a new instance marked as deleted
+            await editTaskInstance(task, { deleted: true, completed: false });
+          }
+        } finally {
+          removeLoadingTask(task.id);
         }
       }
     }

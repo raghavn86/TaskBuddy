@@ -66,23 +66,50 @@ export const updateWellnessTask = async (
   await firestoreService.updateDoc(taskRef, cleanedUpdates);
 };
 
-export const deleteWellnessTask = async (taskId: string): Promise<void> => {
-  // Delete the task
+export const deleteWellnessTask = async (
+  taskId: string,
+  userId: string,
+  partnershipId: string
+): Promise<void> => {
+  const today = new Date().toISOString().split('T')[0];
+
+  // Get all instances for this series
+  const instancesQuery = firestoreService.query(
+    wellnessInstancesCollection,
+    firestoreService.where('seriesId', '==', taskId),
+    firestoreService.where('userId', '==', userId),
+    firestoreService.where('partnershipId', '==', partnershipId)
+  );
+
+  const instances = await firestoreService.getDocs(instancesQuery);
+
+  // Process instances based on date
+  const updatePromises: Promise<void>[] = [];
+
+  instances.docs.forEach((doc: any) => {
+    const instance = doc.data() as WellnessTaskInstance;
+    if (instance.date < today) {
+      // Mark past instances as deleted (to preserve history)
+      updatePromises.push(
+        firestoreService.updateDoc(doc.ref, {
+          deleted: true,
+          updatedAt: Date.now()
+        })
+      );
+    } else {
+      // Delete future instances completely
+      updatePromises.push(
+        firestoreService.deleteDoc(doc.ref)
+      );
+    }
+  });
+
+  await Promise.all(updatePromises);
+
+  // Finally, delete the task series itself
   await firestoreService.deleteDoc(
     firestoreService.doc(wellnessTasksCollection, taskId)
   );
-
-  // Delete all instances of this task
-  const instancesQuery = firestoreService.query(
-    wellnessInstancesCollection,
-    firestoreService.where('seriesId', '==', taskId)
-  );
-  const instances = await firestoreService.getDocs(instancesQuery);
-
-  const deletePromises = instances.docs.map((doc: any) =>
-    firestoreService.deleteDoc(doc.ref)
-  );
-  await Promise.all(deletePromises);
 };
 
 export const getWellnessTask = async (taskId: string): Promise<WellnessTask | null> => {
@@ -378,15 +405,32 @@ export const getTasksForDate = async (
   // Get all instances for this date
   const instances = await getInstancesForDate(userId, partnershipId, date);
 
-  // Create a map of seriesId -> instance
+  // Create a map of seriesId -> instance (excluding deleted instances)
   const instanceMap = new Map<string, WellnessTaskInstance>();
   instances.forEach(instance => {
-    instanceMap.set(instance.seriesId, instance);
+    // Skip deleted instances - they mark the series as hidden for this date
+    if (!instance.deleted) {
+      instanceMap.set(instance.seriesId, instance);
+    }
+  });
+
+  // Get set of series IDs that are deleted for this date
+  const deletedSeriesIds = new Set<string>();
+  instances.forEach(instance => {
+    if (instance.deleted) {
+      deletedSeriesIds.add(instance.seriesId);
+    }
   });
 
   // Filter tasks that should be displayed on this date
   const tasksForDate = allTasks
-    .filter(task => shouldDisplayTaskOnDate(task, date))
+    .filter(task => {
+      // Don't show if there's a deleted instance for this date
+      if (deletedSeriesIds.has(task.id)) {
+        return false;
+      }
+      return shouldDisplayTaskOnDate(task, date);
+    })
     .map(task => ({
       task,
       instance: instanceMap.get(task.id),

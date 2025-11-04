@@ -43,6 +43,7 @@ export interface WellnessTaskInstance {
   title?: string; // Override series title if edited
   categoryId?: string; // Override series category if edited
   completed: boolean;
+  deleted?: boolean; // Mark instance as deleted (used for past instances)
   order?: number; // Override series order if changed
   userId: string; // Owner (same as series)
   partnershipId: string;

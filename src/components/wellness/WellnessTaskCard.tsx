@@ -125,29 +125,27 @@ const WellnessTaskCard: React.FC<WellnessTaskCardProps> = ({
       </Box>
 
       {/* Task title and info */}
-      <Box sx={{ flexGrow: 1, mx: 1, minWidth: 0, overflow: 'hidden' }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+      <Box sx={{ flexGrow: 1, mx: 1, minWidth: 0, overflow: 'hidden', display: 'flex', alignItems: 'center', gap: 0.5 }}>
+        <Typography
+          variant="caption"
+          sx={{
+            fontWeight: 'medium',
+            textDecoration: task.completed ? 'line-through' : 'none',
+            wordWrap: 'break-word',
+            lineHeight: 1.2,
+            flex: 1,
+          }}
+        >
+          {task.title}
+        </Typography>
+        {task.recurrence !== 'one_time' && (
           <Typography
             variant="caption"
-            sx={{
-              fontWeight: 'medium',
-              textDecoration: task.completed ? 'line-through' : 'none',
-              display: 'block',
-              wordWrap: 'break-word',
-              lineHeight: 1.2,
-            }}
+            sx={{ color: 'text.secondary', fontSize: '0.7rem', flexShrink: 0 }}
           >
-            {task.title}
+            {getRecurrenceIcon(task.recurrence)}
           </Typography>
-          {task.recurrence !== 'one_time' && (
-            <Typography
-              variant="caption"
-              sx={{ color: 'text.secondary', fontSize: '0.7rem' }}
-            >
-              {getRecurrenceIcon(task.recurrence)}
-            </Typography>
-          )}
-        </Box>
+        )}
         {category && (
           <Chip
             label={category.name}
@@ -155,9 +153,9 @@ const WellnessTaskCard: React.FC<WellnessTaskCardProps> = ({
             sx={{
               height: '16px',
               fontSize: '0.65rem',
-              mt: 0.25,
               bgcolor: category.color,
               color: 'white',
+              flexShrink: 0,
             }}
           />
         )}

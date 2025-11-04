@@ -217,10 +217,11 @@ export const WellnessProvider: React.FC<WellnessProviderProps> = ({ children }) 
 
   const deleteTaskSeries = useCallback(
     async (seriesId: string) => {
-      await deleteWellnessTask(seriesId);
+      if (!currentUser || !activePartnership) return;
+      await deleteWellnessTask(seriesId, currentUser.uid, activePartnership.id);
       await refreshTasks();
     },
-    [refreshTasks]
+    [currentUser, activePartnership, refreshTasks]
   );
 
   const toggleTaskCompletion = useCallback(
