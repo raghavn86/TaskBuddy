@@ -16,6 +16,18 @@ const wellnessInstancesCollection = firestoreService.collection('wellnessInstanc
 const feelingEntriesCollection = firestoreService.collection('feelingEntries');
 const wellnessCategoriesCollection = firestoreService.collection('wellnessCategories');
 
+// Helper function to remove undefined values from objects
+// Firebase doesn't accept undefined values, so we filter them out
+const cleanUndefined = <T extends Record<string, any>>(obj: T): Partial<T> => {
+  const cleaned: any = {};
+  Object.keys(obj).forEach(key => {
+    if (obj[key] !== undefined) {
+      cleaned[key] = obj[key];
+    }
+  });
+  return cleaned;
+};
+
 // ========== Wellness Task Services ==========
 
 export const createWellnessTask = async (
@@ -29,9 +41,12 @@ export const createWellnessTask = async (
     updatedAt: Date.now(),
   };
 
+  // Clean undefined values before saving to Firebase
+  const cleanedTask = cleanUndefined(newTask);
+
   await firestoreService.setDoc(
     firestoreService.doc(wellnessTasksCollection, taskId),
-    newTask
+    cleanedTask
   );
   return newTask;
 };
@@ -41,10 +56,14 @@ export const updateWellnessTask = async (
   updates: Partial<WellnessTask>
 ): Promise<void> => {
   const taskRef = firestoreService.doc(wellnessTasksCollection, taskId);
-  await firestoreService.updateDoc(taskRef, {
+
+  // Clean undefined values before saving to Firebase
+  const cleanedUpdates = cleanUndefined({
     ...updates,
     updatedAt: Date.now(),
   });
+
+  await firestoreService.updateDoc(taskRef, cleanedUpdates);
 };
 
 export const deleteWellnessTask = async (taskId: string): Promise<void> => {
@@ -105,9 +124,12 @@ export const createWellnessInstance = async (
     updatedAt: Date.now(),
   };
 
+  // Clean undefined values before saving to Firebase
+  const cleanedInstance = cleanUndefined(newInstance);
+
   await firestoreService.setDoc(
     firestoreService.doc(wellnessInstancesCollection, instanceId),
-    newInstance
+    cleanedInstance
   );
   return newInstance;
 };
@@ -117,10 +139,14 @@ export const updateWellnessInstance = async (
   updates: Partial<WellnessTaskInstance>
 ): Promise<void> => {
   const instanceRef = firestoreService.doc(wellnessInstancesCollection, instanceId);
-  await firestoreService.updateDoc(instanceRef, {
+
+  // Clean undefined values before saving to Firebase
+  const cleanedUpdates = cleanUndefined({
     ...updates,
     updatedAt: Date.now(),
   });
+
+  await firestoreService.updateDoc(instanceRef, cleanedUpdates);
 };
 
 export const deleteWellnessInstance = async (instanceId: string): Promise<void> => {
@@ -191,9 +217,12 @@ export const createFeelingEntry = async (
     timestamp: Date.now(),
   };
 
+  // Clean undefined values before saving to Firebase
+  const cleanedEntry = cleanUndefined(newEntry);
+
   await firestoreService.setDoc(
     firestoreService.doc(feelingEntriesCollection, entryId),
-    newEntry
+    cleanedEntry
   );
   return newEntry;
 };
@@ -252,9 +281,12 @@ export const createWellnessCategory = async (
     createdAt: Date.now(),
   };
 
+  // Clean undefined values before saving to Firebase
+  const cleanedCategory = cleanUndefined(newCategory);
+
   await firestoreService.setDoc(
     firestoreService.doc(wellnessCategoriesCollection, categoryId),
-    newCategory
+    cleanedCategory
   );
   return newCategory;
 };
@@ -264,7 +296,11 @@ export const updateWellnessCategory = async (
   updates: Partial<WellnessCategory>
 ): Promise<void> => {
   const categoryRef = firestoreService.doc(wellnessCategoriesCollection, categoryId);
-  await firestoreService.updateDoc(categoryRef, updates);
+
+  // Clean undefined values before saving to Firebase
+  const cleanedUpdates = cleanUndefined(updates);
+
+  await firestoreService.updateDoc(categoryRef, cleanedUpdates);
 };
 
 export const deleteWellnessCategory = async (categoryId: string): Promise<void> => {

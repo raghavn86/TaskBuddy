@@ -67,12 +67,16 @@ const WellnessTaskDialog: React.FC<WellnessTaskDialogProps> = ({
   const handleSave = () => {
     if (!title.trim()) return;
 
-    onSave({
+    // Build the data object
+    // We always include categoryId - either with a value or empty string for no category
+    // This ensures we can clear categories when editing
+    const data: any = {
       title: title.trim(),
       recurrence,
-      categoryId: categoryId || undefined,
-    });
+      categoryId: categoryId || '', // Empty string for no category
+    };
 
+    onSave(data);
     handleClose();
   };
 
