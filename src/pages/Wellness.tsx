@@ -1,20 +1,20 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Box,
   Typography,
-  Button,
   IconButton,
   Paper,
   Fab,
   Alert,
+  useMediaQuery,
+  useTheme,
+  Button,
 } from '@mui/material';
 import {
   ChevronLeft as ChevronLeftIcon,
   ChevronRight as ChevronRightIcon,
-  Today as TodayIcon,
   Add as AddIcon,
   Category as CategoryIcon,
-  CalendarToday as CalendarIcon,
 } from '@mui/icons-material';
 import {
   DndContext,
@@ -34,16 +34,19 @@ import { useWellness } from '../context/WellnessContext';
 import SortableWellnessTaskCard from '../components/wellness/SortableWellnessTaskCard';
 import WellnessTaskDialog from '../components/wellness/WellnessTaskDialog';
 import CategoryManagementDialog from '../components/wellness/CategoryManagementDialog';
-import FeelingTracker from '../components/wellness/FeelingTracker';
+import FeelingTrackerCompact from '../components/wellness/FeelingTrackerCompact';
 import FeelingGraph from '../components/wellness/FeelingGraph';
 import {
-  formatDateDisplay,
+  formatDateShort,
   isToday,
   getWeekday,
 } from '../utils/wellnessHelpers';
 import { DisplayWellnessTask } from '../types/wellness';
 
 const Wellness: React.FC = () => {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+
   const {
     currentDate,
     tasks,
@@ -53,7 +56,6 @@ const Wellness: React.FC = () => {
     isLoading,
     error,
     setCurrentDate,
-    goToToday,
     goToPreviousDay,
     goToNextDay,
     addTask,
@@ -73,7 +75,7 @@ const Wellness: React.FC = () => {
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<DisplayWellnessTask | null>(null);
   const [editSeries, setEditSeries] = useState(false);
-  const [datePickerOpen, setDatePickerOpen] = useState(false);
+  const dateInputRef = useRef<HTMLInputElement>(null);
 
   // Drag and drop sensors
   const mouseSensor = useSensor(MouseSensor, {
@@ -109,14 +111,7 @@ const Wellness: React.FC = () => {
       }
     } else {
       if (window.confirm('Delete this task instance?')) {
-        // Create a "deleted" instance by marking completed as false and hiding it
-        // Or we can add a deleted flag to the instance
-        // For now, we'll just not create an instance if it doesn't exist
-        // If it exists, we delete it
         if (task.isInstance) {
-          // We would need a deleteInstance method in the context
-          // For now, let's just mark it as completed and invisible
-          // This is a limitation - we'll handle it properly
           alert('To delete an instance, edit the task and mark it as complete or use the series delete.');
         }
       }
@@ -130,21 +125,18 @@ const Wellness: React.FC = () => {
   }) => {
     if (editingTask) {
       if (editSeries) {
-        // Edit series
         await editTaskSeries(editingTask.seriesId, {
           title: data.title,
           recurrence: data.recurrence,
           categoryId: data.categoryId,
         });
       } else {
-        // Edit instance
         await editTaskInstance(editingTask, {
           title: data.title,
           categoryId: data.categoryId,
         });
       }
     } else {
-      // Add new task
       await addTask(data.title, data.recurrence, data.categoryId);
     }
 
@@ -156,11 +148,6 @@ const Wellness: React.FC = () => {
   const handleManageCategories = () => {
     setCategoryDialogOpen(true);
     setTaskDialogOpen(false);
-  };
-
-  const handleBackToTaskDialog = () => {
-    setCategoryDialogOpen(false);
-    setTaskDialogOpen(true);
   };
 
   // Drag and drop
@@ -180,7 +167,11 @@ const Wellness: React.FC = () => {
     }
   };
 
-  // Date picker (simple version)
+  // Date picker - clicking on date opens the native date picker
+  const handleDateClick = () => {
+    dateInputRef.current?.showPicker?.();
+  };
+
   const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setCurrentDate(e.target.value);
   };
@@ -197,16 +188,28 @@ const Wellness: React.FC = () => {
         </Alert>
       )}
 
-      {/* Date Navigation */}
-      <Paper elevation={1} sx={{ p: 2, mb: 3 }}>
+      {/* Date Navigation - Compact */}
+      <Paper elevation={1} sx={{ p: 1.5, mb: 2 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <IconButton onClick={goToPreviousDay} size="small">
             <ChevronLeftIcon />
           </IconButton>
 
-          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1 }}>
-            <Typography variant="h6">
-              {formatDateDisplay(currentDate)}
+          <Box
+            sx={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              flex: 1,
+              cursor: 'pointer',
+              '&:hover': {
+                opacity: 0.7,
+              }
+            }}
+            onClick={handleDateClick}
+          >
+            <Typography variant="subtitle1" sx={{ fontWeight: 'medium' }}>
+              {formatDateShort(currentDate)}
             </Typography>
             <Typography variant="caption" color="text.secondary">
               {isToday(currentDate) ? 'Today' : getWeekday(currentDate)}
@@ -216,56 +219,22 @@ const Wellness: React.FC = () => {
           <IconButton onClick={goToNextDay} size="small">
             <ChevronRightIcon />
           </IconButton>
-        </Box>
 
-        <Box sx={{ display: 'flex', gap: 1, mt: 2 }}>
-          <Button
-            variant="outlined"
-            startIcon={<TodayIcon />}
-            onClick={goToToday}
-            fullWidth
-            size="small"
-          >
-            Today
-          </Button>
-          <Button
-            variant="outlined"
-            startIcon={<CalendarIcon />}
-            onClick={() => setDatePickerOpen(!datePickerOpen)}
-            fullWidth
-            size="small"
-          >
-            Pick Date
-          </Button>
+          {/* Hidden date input for picker */}
+          <input
+            ref={dateInputRef}
+            type="date"
+            value={currentDate}
+            onChange={handleDateChange}
+            style={{ position: 'absolute', opacity: 0, pointerEvents: 'none' }}
+          />
         </Box>
-
-        {datePickerOpen && (
-          <Box sx={{ mt: 2 }}>
-            <input
-              type="date"
-              value={currentDate}
-              onChange={handleDateChange}
-              style={{
-                width: '100%',
-                padding: '8px',
-                borderRadius: '4px',
-                border: '1px solid #ccc',
-              }}
-            />
-          </Box>
-        )}
       </Paper>
 
-      {/* Feeling Tracker */}
-      <FeelingTracker
-        latestFeeling={latestFeeling}
-        onAddEntry={addFeelingEntry}
-      />
-
-      {/* Tasks Section */}
-      <Paper elevation={1} sx={{ p: 2, mb: 3 }}>
+      {/* Tasks Section - Moved up */}
+      <Paper elevation={1} sx={{ p: 2, mb: 2 }}>
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-          <Typography variant="h6">Tasks for {isToday(currentDate) ? 'Today' : 'This Day'}</Typography>
+          <Typography variant="h6">Tasks</Typography>
           <Button
             variant="outlined"
             startIcon={<CategoryIcon />}
@@ -309,17 +278,28 @@ const Wellness: React.FC = () => {
         )}
       </Paper>
 
+      {/* Feeling Tracker - Moved down, compact version */}
+      <FeelingTrackerCompact
+        latestFeeling={latestFeeling}
+        onAddEntry={addFeelingEntry}
+      />
+
       {/* Graph */}
       <FeelingGraph
         entries={feelingEntries}
         onLoadMore={loadFeelingEntries}
       />
 
-      {/* Floating Action Button */}
+      {/* Floating Action Button - Fixed positioning for mobile */}
       <Fab
         color="primary"
         aria-label="add task"
-        sx={{ position: 'fixed', bottom: 16, right: 16 }}
+        sx={{
+          position: 'fixed',
+          bottom: isMobile ? 72 : 16, // 72px to account for bottom nav on mobile (56px + 16px margin)
+          right: 16,
+          zIndex: 1000,
+        }}
         onClick={handleAddTask}
       >
         <AddIcon />
