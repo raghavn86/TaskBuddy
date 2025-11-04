@@ -117,11 +117,13 @@ export const WellnessProvider: React.FC<WellnessProviderProps> = ({ children }) 
   const [error, setError] = useState<string | null>(null);
 
   // Load tasks for current date
-  const loadTasksForDate = useCallback(async (date: string) => {
+  const loadTasksForDate = useCallback(async (date: string, showLoading: boolean = true) => {
     if (!currentUser || !activePartnership) return;
 
     try {
-      setIsLoading(true);
+      if (showLoading) {
+        setIsLoading(true);
+      }
       setError(null);
 
       const tasksWithInstances = await getTasksForDate(
@@ -139,13 +141,15 @@ export const WellnessProvider: React.FC<WellnessProviderProps> = ({ children }) 
       console.error('Error loading tasks:', err);
       setError('Failed to load tasks');
     } finally {
-      setIsLoading(false);
+      if (showLoading) {
+        setIsLoading(false);
+      }
     }
   }, [currentUser, activePartnership]);
 
-  // Refresh tasks for current date
+  // Refresh tasks for current date (without showing loading state)
   const refreshTasks = useCallback(async () => {
-    await loadTasksForDate(currentDate);
+    await loadTasksForDate(currentDate, false);
   }, [currentDate, loadTasksForDate]);
 
   // Load tasks when date changes
