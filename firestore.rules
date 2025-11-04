@@ -103,24 +103,100 @@ service cloud.firestore {
     // Categories rules - allow users to access categories for their partnerships
     match /categories/{categoryId} {
       // Allow reading a category if user is part of the partnership
-      allow read: if request.auth != null && 
+      allow read: if request.auth != null &&
         partnershipHasUser(resource.data.partnershipId, request.auth.uid);
-      
+
       // Allow category creation for authenticated users (with partnership validation)
-      allow create: if request.auth != null && 
+      allow create: if request.auth != null &&
         partnershipHasUser(request.resource.data.partnershipId, request.auth.uid);
-      
+
       // Allow updates/deletes if user is part of the partnership
-      allow update, delete: if request.auth != null && 
+      allow update, delete: if request.auth != null &&
         partnershipHasUser(resource.data.partnershipId, request.auth.uid);
     }
-    
+
+    // ========== WELLNESS & HABITS FEATURE RULES ==========
+
+    // Wellness tasks rules - allow users to access their own wellness tasks
+    match /wellnessTasks/{taskId} {
+      // Allow reading a task if user owns it and is part of the partnership
+      allow read: if request.auth != null &&
+        resource.data.userId == request.auth.uid &&
+        partnershipHasUser(resource.data.partnershipId, request.auth.uid);
+
+      // Allow creating a task if user owns it and is part of the partnership
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid &&
+        partnershipHasUser(request.resource.data.partnershipId, request.auth.uid);
+
+      // Allow updates/deletes if user owns the task and is part of the partnership
+      allow update, delete: if request.auth != null &&
+        resource.data.userId == request.auth.uid &&
+        partnershipHasUser(resource.data.partnershipId, request.auth.uid);
+    }
+
+    // Wellness task instances rules - allow users to access their own instances
+    match /wellnessInstances/{instanceId} {
+      // Allow reading an instance if user owns it and is part of the partnership
+      allow read: if request.auth != null &&
+        resource.data.userId == request.auth.uid &&
+        partnershipHasUser(resource.data.partnershipId, request.auth.uid);
+
+      // Allow creating an instance if user owns it and is part of the partnership
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid &&
+        partnershipHasUser(request.resource.data.partnershipId, request.auth.uid);
+
+      // Allow updates/deletes if user owns the instance and is part of the partnership
+      allow update, delete: if request.auth != null &&
+        resource.data.userId == request.auth.uid &&
+        partnershipHasUser(resource.data.partnershipId, request.auth.uid);
+    }
+
+    // Feeling entries rules - allow users to access their own feeling entries
+    match /feelingEntries/{entryId} {
+      // Allow reading a feeling entry if user owns it and is part of the partnership
+      allow read: if request.auth != null &&
+        resource.data.userId == request.auth.uid &&
+        partnershipHasUser(resource.data.partnershipId, request.auth.uid);
+
+      // Allow creating a feeling entry if user owns it and is part of the partnership
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid &&
+        partnershipHasUser(request.resource.data.partnershipId, request.auth.uid);
+
+      // Allow updates if user owns the entry and is part of the partnership
+      // Note: Deletes are not allowed to maintain history
+      allow update: if request.auth != null &&
+        resource.data.userId == request.auth.uid &&
+        partnershipHasUser(resource.data.partnershipId, request.auth.uid);
+    }
+
+    // Wellness categories rules - allow users to access categories for their partnerships
+    match /wellnessCategories/{categoryId} {
+      // Allow reading a category if user is part of the partnership
+      allow read: if request.auth != null &&
+        partnershipHasUser(resource.data.partnershipId, request.auth.uid);
+
+      // Allow creating a category if user is part of the partnership
+      allow create: if request.auth != null &&
+        request.resource.data.userId == request.auth.uid &&
+        partnershipHasUser(request.resource.data.partnershipId, request.auth.uid);
+
+      // Allow updates/deletes if user created the category or is part of the partnership
+      allow update, delete: if request.auth != null &&
+        (resource.data.userId == request.auth.uid ||
+         partnershipHasUser(resource.data.partnershipId, request.auth.uid));
+    }
+
+    // ========== END WELLNESS & HABITS FEATURE RULES ==========
+
     // Helper function to check if a user is part of a partnership
     function partnershipHasUser(partnershipId, userId) {
       // Check if partnership ID is valid
-      return partnershipId != null && 
-        exists(/databases/$(database)/documents/partnerships/$(partnershipId)) && 
-        ((get(/databases/$(database)/documents/partnerships/$(partnershipId)).data.createdBy == userId) || 
+      return partnershipId != null &&
+        exists(/databases/$(database)/documents/partnerships/$(partnershipId)) &&
+        ((get(/databases/$(database)/documents/partnerships/$(partnershipId)).data.createdBy == userId) ||
          (userId in get(/databases/$(database)/documents/partnerships/$(partnershipId)).data.partners));
     }
   }
