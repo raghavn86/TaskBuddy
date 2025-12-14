@@ -33,6 +33,7 @@ export type Task = Item & {
   assignedTo: string | null; // userId or null for unassigned
   completed: boolean;
   categoryId?: string; // Reference to TaskCategory, empty string for no category
+  notes?: string; // Optional notes for additional task context
 };
 
 // TaskItem for storage - discriminated union

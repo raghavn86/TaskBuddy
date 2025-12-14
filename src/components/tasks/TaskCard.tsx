@@ -10,7 +10,6 @@ import {
   Typography,
   Tooltip,
   Divider,
-  Chip,
 } from '@mui/material';
 import { 
   MoreVert as MoreVertIcon,
@@ -20,6 +19,7 @@ import {
   PersonOutline as PersonOutlineIcon,
   Person as PersonIcon,
   ViewHeadline as SectionIcon,
+  StickyNote2Outlined as NotesIcon,
 } from '@mui/icons-material';
 import { Task, TaskCategory } from '../../types';
 import { useTaskManager } from '../../context/TaskContext';
@@ -35,6 +35,7 @@ type TaskCardProps = {
   onAddSectionAbove?: () => void;
   dragHandleProps?: any;
   isDragging?: boolean;
+  onNotesClick?: () => void;
 };
 
 const TaskCard: React.FC<TaskCardProps> = ({
@@ -46,11 +47,13 @@ const TaskCard: React.FC<TaskCardProps> = ({
   onToggleComplete,
   onAssign,
   onAddSectionAbove,
+  onNotesClick,
 }) => {
   const { taskService } = useTaskManager();
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   
   const category = categories.find(c => c.id === task.categoryId);
+  const hasNotes = Boolean(task.notes && task.notes.trim().length > 0);
   
   const handleMenuOpen = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.stopPropagation();
@@ -116,6 +119,12 @@ const TaskCard: React.FC<TaskCardProps> = ({
     return taskService.getTaskBackgroundColor(task);
   };
   
+  const handleCardClick = () => {
+    if (hasNotes && onNotesClick) {
+      onNotesClick();
+    }
+  };
+
   return (
     <Paper 
       elevation={1}
@@ -133,8 +142,9 @@ const TaskCard: React.FC<TaskCardProps> = ({
           boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
         },
         minHeight: '36px',
-        cursor: 'inherit' // Let parent handle cursor
+        cursor: hasNotes && onNotesClick ? 'pointer' : 'inherit' // Visual cue only when notes are available
       }}
+      onClick={handleCardClick}
     >
       {/* Stop propagation to prevent drag from starting on interactive elements */}
       <Box onClick={(e) => e.stopPropagation()}>
@@ -168,6 +178,22 @@ const TaskCard: React.FC<TaskCardProps> = ({
         <TimeIcon sx={{ fontSize: 14, mr: 0.5 }} />
         <Typography variant="caption">{task.minutes}</Typography>
       </Box>
+
+      {hasNotes && (
+        <Tooltip title="Task has notes">
+          <IconButton
+            size="small"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onNotesClick?.();
+            }}
+            sx={{ p: 0.5, color: 'text.secondary' }}
+          >
+            <NotesIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      )}
       
       <Box onClick={(e) => e.stopPropagation()}>
         <IconButton 

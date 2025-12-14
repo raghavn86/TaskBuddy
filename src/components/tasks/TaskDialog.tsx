@@ -67,6 +67,7 @@ const TaskDialog: React.FC<TaskDialogProps> = ({
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [notes, setNotes] = useState('');
   
   const weekDays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   
@@ -77,12 +78,14 @@ const TaskDialog: React.FC<TaskDialogProps> = ({
       setAssignedTo(task.assignedTo);
       setCategoryId(task.categoryId || '');
       setSelectedDays([currentDayIndex]); // Start with current day selected
+      setNotes(task.notes || '');
     } else {
       setTitle('');
       setMinutes('30');
       setAssignedTo(null);
       setCategoryId('');
       setSelectedDays([currentDayIndex]); // Default to current day
+      setNotes('');
     }
     setErrors({});
     setSaveError(null);
@@ -120,6 +123,10 @@ const TaskDialog: React.FC<TaskDialogProps> = ({
       setSelectedDays(newSelectedDays.length ? newSelectedDays : [currentDayIndex]);
     }
   };
+
+  const handleNotesChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    setNotes(e.target.value);
+  };
   
   const handleSave = async () => {
     // Validate inputs
@@ -145,6 +152,7 @@ const TaskDialog: React.FC<TaskDialogProps> = ({
       assignedTo,
       categoryId,
       completed: task?.completed || false,
+      notes: notes.trim(),
     };
 
     setIsSaving(true);
@@ -228,6 +236,20 @@ const TaskDialog: React.FC<TaskDialogProps> = ({
           selectedCategoryId={categoryId}
           onCategoryChange={setCategoryId}
           onCreateCategory={onCreateCategory}
+        />
+
+        <TextField
+          margin="dense"
+          id="task-notes"
+          label="Notes"
+          type="text"
+          multiline
+          minRows={3}
+          fullWidth
+          value={notes}
+          onChange={handleNotesChange}
+          placeholder="Add extra context or instructions"
+          sx={{ mb: 3 }}
         />
         
         <FormControl fullWidth sx={{ mb: isWeekView ? 3 : 0 }}>

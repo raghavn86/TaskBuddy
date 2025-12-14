@@ -14,6 +14,7 @@ type SortableTaskCardProps = {
   onAssign: (userId: string | null) => void;
   onAddSectionAbove?: () => void;
   dragContextId?: string; // Add drag context ID for cross-container dragging
+  onNotesClick?: () => void;
 };
 
 // Simplified SortableTaskCard with minimal configuration

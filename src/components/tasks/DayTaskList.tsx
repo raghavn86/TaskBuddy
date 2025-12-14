@@ -25,6 +25,7 @@ import TaskCard from './TaskCard';
 import SortableTaskCard from './SortableTaskCard';
 import TaskDialog from './TaskDialog';
 import DraggableSectionItem from '../sections/DraggableSectionItem';
+import TaskNotesDialog from './TaskNotesDialog';
 
 // Helper function to convert hex color to rgba
 const getUserColorAsRgba = (taskService: any, opacity = 0.08) => {
@@ -106,6 +107,7 @@ const DayTaskList: React.FC<DayTaskListProps> = ({
   const { taskService } = useTaskManager();
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [currentTask, setCurrentTask] = useState<Task | undefined>(undefined);
+  const [notesTask, setNotesTask] = useState<Task | null>(null);
   
   // Using simpler mouse and touch sensors with minimal configuration
   const sensors = useSensors(
@@ -169,6 +171,14 @@ const DayTaskList: React.FC<DayTaskListProps> = ({
     const taskIndex = taskItems.findIndex(item => item.item.id === taskItem.item.id);
     if (taskIndex !== -1) {
       onOpenSectionDialog(taskIndex);
+    }
+  };
+
+  const handleNotesClick = (taskItem: TaskItem) => {
+    if (taskItem.type !== 'task') return;
+    const targetTask = taskItem.item as Task;
+    if (targetTask.notes && targetTask.notes.trim().length > 0) {
+      setNotesTask(targetTask);
     }
   };
 
@@ -313,6 +323,7 @@ const DayTaskList: React.FC<DayTaskListProps> = ({
                       onAssign={(assignedTo) => handleTaskAssign(taskItem, assignedTo)}
                       onAddSectionAbove={onOpenSectionDialog ? () => handleAddSectionAbove(taskItem) : undefined}
                       dragContextId={dragContextId || 'default'}
+                      onNotesClick={() => handleNotesClick(taskItem)}
                     />
                   ) : (
                     <DraggableSectionItem
@@ -342,6 +353,17 @@ const DayTaskList: React.FC<DayTaskListProps> = ({
         dialogTitle={currentTask ? 'Edit Task' : 'Add Task'}
         currentDayIndex={dayOfWeek}
         tasks={displayTasks}
+      />
+
+      <TaskNotesDialog
+        open={!!notesTask}
+        taskTitle={notesTask?.title || ''}
+        initialNotes={notesTask?.notes || ''}
+        onClose={() => setNotesTask(null)}
+        onSave={(value) => {
+          if (!notesTask) return Promise.resolve();
+          return Promise.resolve(onUpdateTask(notesTask.id, { notes: value }));
+        }}
       />
     </Paper>
   );
