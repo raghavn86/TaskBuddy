@@ -5,7 +5,7 @@ import App from './App';
 import { AuthProvider } from './context/AuthContext';
 import { TaskProvider } from './context/TaskContext';
 import { PartnershipProvider } from './context/PartnershipContext';
-import { WellnessProvider } from './context/WellnessContext';
+import { RewardsProvider } from './context/RewardsContext';
 import { CssBaseline } from '@mui/material';
 import { ThemeProvider } from '@mui/material/styles';
 import theme from './theme';
@@ -23,9 +23,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         <AuthProvider>
           <PartnershipProvider>
             <TaskProvider>
-              <WellnessProvider>
+              <RewardsProvider>
                 <App />
-              </WellnessProvider>
+              </RewardsProvider>
             </TaskProvider>
           </PartnershipProvider>
         </AuthProvider>

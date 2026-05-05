@@ -13,7 +13,7 @@ import Templates from './pages/Templates';
 import TemplateDetail from './pages/TemplateDetail';
 import ExecutionPlans from './pages/ExecutionPlans';
 import ExecutionPlanDetail from './pages/ExecutionPlanDetail';
-import Wellness from './pages/Wellness';
+import Rewards from './pages/Rewards';
 import Analytics from './pages/Analytics';
 import Logs from './pages/Logs';
 import NotFound from './pages/NotFound';
@@ -76,7 +76,7 @@ const App: React.FC = () => {
   const location = useLocation();
 
   // Memoize expensive calculations
-  const validAppRoutes = useMemo(() => ['/templates', '/plans', '/wellness', '/analytics', '/logs'], []);
+  const validAppRoutes = useMemo(() => ['/templates', '/plans', '/rewards', '/analytics', '/logs'], []);
   
   const isOnValidRoute = useMemo(() => 
     validAppRoutes.some(route => location.pathname.startsWith(route)),
@@ -112,7 +112,8 @@ const App: React.FC = () => {
             <Route index element={<Navigate to="/partnerships" />} />
             <Route path="templates" element={<Navigate to="/partnerships" />} />
             <Route path="plans" element={<Navigate to="/partnerships" />} />
-            <Route path="wellness" element={<Navigate to="/partnerships" />} />
+            <Route path="rewards" element={<Navigate to="/partnerships" />} />
+            <Route path="wellness" element={<Navigate to="/rewards" replace />} />
             <Route path="analytics" element={<Navigate to="/partnerships" />} />
             <Route path="logs" element={<Navigate to="/partnerships" />} />
           </>
@@ -125,7 +126,8 @@ const App: React.FC = () => {
             <Route path="templates/:templateId" element={<PartnershipRoute><TemplateDetail /></PartnershipRoute>} />
             <Route path="plans" element={<PartnershipRoute><ExecutionPlans /></PartnershipRoute>} />
             <Route path="plans/:planId" element={<PartnershipRoute><ExecutionPlanDetail /></PartnershipRoute>} />
-            <Route path="wellness" element={<PartnershipRoute><Wellness /></PartnershipRoute>} />
+            <Route path="rewards" element={<PartnershipRoute><Rewards /></PartnershipRoute>} />
+            <Route path="wellness" element={<Navigate to="/rewards" replace />} />
             <Route path="analytics" element={<PartnershipRoute><Analytics /></PartnershipRoute>} />
             <Route path="logs" element={<PartnershipRoute><Logs /></PartnershipRoute>} />
           </>
