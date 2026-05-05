@@ -16,16 +16,19 @@ import {
   addRewardWeekNote,
   applyKidStepDelta,
   canFreezeRewardWeek,
+  canUnfreezeRewardWeek,
   consumeSingleRewardUnit,
   createDefaultRewardsTemplate,
   freezeRewardWeek,
   getRewardWeekGroups,
   getRewardsTemplate,
   instantiateNextRewardWeek,
+  isRewardBoundaryDay,
   openNextRewardWeek,
   previewFreezeRewardWeek,
   resetRewardProgress,
   syncCurrentAndFutureRewardWeeksFromTemplate,
+  unfreezeRewardWeek,
   updateRewardAvailability,
   updateRewardWeekKid,
   updateRewardsTemplate,
@@ -46,6 +49,7 @@ type RewardsContextType = {
   rewardSourceWeek: RewardWeekGroup | null;
   freezePreview: RewardFreezePreviewKid[];
   canFreezeCurrentWeek: boolean;
+  canUnfreezeCurrentWeek: boolean;
   syncStatusByRecordId: Record<string, SyncState>;
   isLoading: boolean;
   error: string | null;
@@ -56,6 +60,7 @@ type RewardsContextType = {
   instantiateNextWeek: () => Promise<void>;
   loadFreezePreview: () => Promise<void>;
   freezeCurrentWeek: (carryForwardUnusedRewards: boolean) => Promise<void>;
+  unfreezeCurrentWeek: () => Promise<void>;
   openCurrentNextWeek: (carryForwardLevel: boolean) => Promise<void>;
   changeKidStep: (recordId: string, delta: 1 | -1) => Promise<void>;
   addNote: (recordId: string, type: 'good' | 'bad', text: string) => Promise<void>;
@@ -246,15 +251,15 @@ export const RewardsProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setError(null);
 
     try {
-        const createdRecords = await instantiateNextRewardWeek(template);
+      const createdRecords = await instantiateNextRewardWeek(template);
       upsertRecords(createdRecords);
     } catch (err) {
       console.error('Failed to instantiate next week', err);
-      setError('Failed to instantiate next week');
+      setError(err instanceof Error ? err.message : 'Failed to instantiate next week');
     } finally {
       setIsLoading(false);
     }
-  }, [template]);
+  }, [template, upsertRecords]);
 
   const loadFreezePreview = useCallback(async () => {
     if (!template) {
@@ -297,6 +302,26 @@ export const RewardsProvider: React.FC<{ children: React.ReactNode }> = ({ child
     },
     [template, upsertRecords],
   );
+
+  const unfreezeCurrentWeek = useCallback(async () => {
+    if (!template) {
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const updatedRecords = await unfreezeRewardWeek(template.partnershipId, template.currentWeekOrder);
+      upsertRecords(updatedRecords);
+      setFreezePreview([]);
+    } catch (err) {
+      console.error('Failed to unfreeze current week', err);
+      setError(err instanceof Error ? err.message : 'Failed to unfreeze current week');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [template, upsertRecords]);
 
   const openCurrentNextWeek = useCallback(
     async (carryForwardLevel: boolean) => {
@@ -574,6 +599,7 @@ export const RewardsProvider: React.FC<{ children: React.ReactNode }> = ({ child
       await resetRewardProgress(template.partnershipId, template.id);
       setTemplate((previous) => (previous ? { ...previous, currentWeekOrder: 0, updatedAt: Date.now() } : previous));
       setWeekGroups([]);
+      setFreezePreview([]);
       setSyncStatusByRecordId({});
     } catch (err) {
       console.error('Failed to reset rewards progress', err);
@@ -600,7 +626,18 @@ export const RewardsProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, [template, weekGroups]);
 
   const canFreezeCurrentWeek = useMemo(
-    () => canFreezeRewardWeek(currentWeek?.kids || []),
+    () => {
+      if (!template) {
+        return false;
+      }
+
+      return isRewardBoundaryDay(template.weekBoundaryDay) && canFreezeRewardWeek(currentWeek?.kids || []);
+    },
+    [currentWeek?.kids, template],
+  );
+
+  const canUnfreezeCurrentWeek = useMemo(
+    () => canUnfreezeRewardWeek(currentWeek?.kids || []),
     [currentWeek?.kids],
   );
 
@@ -611,6 +648,7 @@ export const RewardsProvider: React.FC<{ children: React.ReactNode }> = ({ child
     rewardSourceWeek,
     freezePreview,
     canFreezeCurrentWeek,
+    canUnfreezeCurrentWeek,
     syncStatusByRecordId,
     isLoading,
     error,
@@ -621,6 +659,7 @@ export const RewardsProvider: React.FC<{ children: React.ReactNode }> = ({ child
     instantiateNextWeek,
     loadFreezePreview,
     freezeCurrentWeek,
+    unfreezeCurrentWeek,
     openCurrentNextWeek,
     changeKidStep,
     addNote,

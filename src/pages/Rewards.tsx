@@ -226,6 +226,7 @@ const Rewards: React.FC = () => {
     rewardSourceWeek,
     freezePreview,
     canFreezeCurrentWeek,
+    canUnfreezeCurrentWeek,
     syncStatusByRecordId,
     isLoading,
     error,
@@ -235,6 +236,7 @@ const Rewards: React.FC = () => {
     instantiateNextWeek,
     loadFreezePreview,
     freezeCurrentWeek,
+    unfreezeCurrentWeek,
     openCurrentNextWeek,
     changeKidStep,
     addNote,
@@ -517,12 +519,17 @@ const Rewards: React.FC = () => {
     onEdit: () => void,
     onDelete: () => void,
     muted = false,
-    options?: { showControls?: boolean; prefix?: string },
+    options?: { showControls?: boolean; prefix?: string; boxed?: boolean },
   ) => (
     <Box
       key={reward.id}
       sx={{
         py: 0.75,
+        px: options?.boxed ? 1.1 : 0,
+        borderRadius: options?.boxed ? 2 : 0,
+        border: options?.boxed ? '1px solid' : 'none',
+        borderColor: options?.boxed ? 'divider' : 'transparent',
+        backgroundColor: options?.boxed ? 'background.paper' : 'transparent',
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'flex-start',
@@ -565,9 +572,13 @@ const Rewards: React.FC = () => {
       showStepMeta?: boolean;
       showControls?: boolean;
       rewardPrefix?: string;
+      showDividers?: boolean;
     },
   ) => (
-    <Stack divider={<Divider flexItem />} sx={{ borderTop: '1px solid', borderColor: 'divider' }}>
+    <Stack
+      divider={options.showDividers === false ? undefined : <Divider flexItem />}
+      sx={options.showDividers === false ? undefined : { borderTop: '1px solid', borderColor: 'divider' }}
+    >
       {levels.map((level, index) => {
         const isLocked = options.showLockedState ? index > (options.currentLevel ?? -1) : false;
         const levelLabel = `Level ${index + 1}`;
@@ -607,6 +618,25 @@ const Rewards: React.FC = () => {
                       <EditIcon sx={{ fontSize: 14 }} />
                     </IconButton>
                   )}
+                  {options.scope === 'template' && template ? (
+                    <IconButton
+                      size="small"
+                      sx={{ p: 0.25 }}
+                      disabled={template.levels.length <= 1}
+                      onClick={() => {
+                        const nextLevels = template.levels.filter((_, levelIndex) => levelIndex !== index);
+                        void saveTemplate({
+                          levels: nextLevels,
+                          defaultStartLevel: Math.min(
+                            template.defaultStartLevel,
+                            Math.max(nextLevels.length - 1, 0),
+                          ),
+                        });
+                      }}
+                    >
+                      <DeleteIcon sx={{ fontSize: 14 }} />
+                    </IconButton>
+                  ) : null}
                 </Stack>
               </Box>
               {options.showControls === false ? null : (
@@ -645,7 +675,11 @@ const Rewards: React.FC = () => {
                         ? removeTemplateLevelReward(level.id, reward.id)
                         : removeWeekLevelReward(options.recordId!, level.id, reward.id)),
                     isLocked,
-                    { showControls: options.showControls, prefix: options.rewardPrefix },
+                    {
+                      showControls: options.showControls,
+                      prefix: options.rewardPrefix,
+                      boxed: options.showControls !== false,
+                    },
                   ),
                 )
               )}
@@ -876,6 +910,7 @@ const Rewards: React.FC = () => {
                               showStepMeta: false,
                               showControls: false,
                               rewardPrefix: '›',
+                              showDividers: false,
                             })}
                           </Box>
 
@@ -1342,26 +1377,6 @@ const Rewards: React.FC = () => {
                     </Box>
 
                     {renderLevelSections(template.levels, { scope: 'template' })}
-
-                    <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
-                      {template.levels.map((_, index) => (
-                        <Button
-                          key={index}
-                          size="small"
-                          color="error"
-                          disabled={template.levels.length <= 1}
-                          onClick={() => {
-                            const nextLevels = template.levels.filter((_, levelIndex) => levelIndex !== index);
-                            void saveTemplate({
-                              levels: nextLevels,
-                              defaultStartLevel: Math.min(template.defaultStartLevel, Math.max(nextLevels.length - 1, 0)),
-                            });
-                          }}
-                        >
-                          Remove Level {index + 1}
-                        </Button>
-                      ))}
-                    </Stack>
                   </Stack>
                 </CardContent>
               </Card>
@@ -1434,6 +1449,17 @@ const Rewards: React.FC = () => {
             </Button>
             <Button
               variant="outlined"
+              color="warning"
+              onClick={() => {
+                void unfreezeCurrentWeek();
+                setActionsOpen(false);
+              }}
+              disabled={!canUnfreezeCurrentWeek}
+            >
+              Unfreeze Current Week
+            </Button>
+            <Button
+              variant="outlined"
               onClick={() => {
                 void openCurrentNextWeek(false);
                 setActionsOpen(false);
@@ -1472,6 +1498,11 @@ const Rewards: React.FC = () => {
               }
               label="Carry forward unused rewards from last week"
             />
+            {!canFreezeCurrentWeek ? (
+              <Alert severity="info">
+                Freeze is only available on the configured boundary day.
+              </Alert>
+            ) : null}
             {freezePreview.length === 0 ? (
               <Typography variant="body2" color="text.secondary">
                 No pending rewards to preview.

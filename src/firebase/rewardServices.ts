@@ -163,6 +163,19 @@ const normalizeWeekRecord = (record: RewardWeekKidRecord): RewardWeekKidRecord =
   notes: record.notes || [],
 });
 
+const getRawRewardWeekRecords = async (partnershipId: string): Promise<RewardWeekKidRecord[]> => {
+  const querySnapshot = await firestoreService.getDocs(
+    firestoreService.query(
+      rewardWeekKidsCollection,
+      firestoreService.where('partnershipId', '==', partnershipId),
+    ),
+  );
+
+  return querySnapshot.docs.map((doc: any) => normalizeWeekRecord(doc.data() as RewardWeekKidRecord));
+};
+
+export const isRewardBoundaryDay = (weekBoundaryDay: number, now = new Date()): boolean => now.getDay() === weekBoundaryDay;
+
 export const createDefaultRewardsTemplate = async (
   partnershipId: string,
   userId: string,
@@ -211,16 +224,7 @@ export const updateRewardsTemplate = async (
 };
 
 export const getRewardWeekRecords = async (partnershipId: string): Promise<RewardWeekKidRecord[]> => {
-  const querySnapshot = await firestoreService.getDocs(
-    firestoreService.query(
-      rewardWeekKidsCollection,
-      firestoreService.where('partnershipId', '==', partnershipId),
-    ),
-  );
-
-  return dedupeWeekRecords(
-    querySnapshot.docs.map((doc: any) => normalizeWeekRecord(doc.data() as RewardWeekKidRecord)),
-  )
+  return dedupeWeekRecords(await getRawRewardWeekRecords(partnershipId))
     .sort((a, b) => a.weekOrder - b.weekOrder || a.kidName.localeCompare(b.kidName));
 };
 
@@ -259,7 +263,6 @@ export const instantiateNextRewardWeek = async (template: RewardTemplate): Promi
       appliedTitleBoost,
       createdAt: now,
       updatedAt: now,
-      openedAt: nextWeekOrder === template.currentWeekOrder ? now : undefined,
       levels: deepCloneLevels(template.levels),
       currentLevel,
       currentStep: getStartingStep(currentLevel, template.levels, appliedTitleBoost),
@@ -267,6 +270,10 @@ export const instantiateNextRewardWeek = async (template: RewardTemplate): Promi
       earnedRewards: [],
       notes: [],
     };
+
+    if (nextWeekOrder === template.currentWeekOrder) {
+      record.openedAt = now;
+    }
 
     return record;
   });
@@ -540,9 +547,45 @@ export const freezeRewardWeek = async (
   return updatedRecords;
 };
 
+export const unfreezeRewardWeek = async (
+  partnershipId: string,
+  weekOrder: number,
+): Promise<RewardWeekKidRecord[]> => {
+  const allRecords = await getRewardWeekRecords(partnershipId);
+  const currentWeekRecords = allRecords.filter((record) => record.weekOrder === weekOrder);
+  if (currentWeekRecords.length === 0) {
+    throw new Error('Current week is not instantiated');
+  }
+  if (!currentWeekRecords.some((record) => Boolean(record.frozenAt))) {
+    throw new Error('Current week is not frozen');
+  }
+
+  const updatedRecords = currentWeekRecords.map((record) => {
+    const updatedRecord: RewardWeekKidRecord = {
+      ...record,
+      earnedRewards: [],
+      updatedAt: Date.now(),
+    };
+    delete updatedRecord.frozenAt;
+    return updatedRecord;
+  });
+
+  await Promise.all(
+    updatedRecords.map((record) =>
+      firestoreService.setDoc(firestoreService.doc(rewardWeekKidsCollection, record.id), record),
+    ),
+  );
+
+  return updatedRecords;
+};
+
 export const canFreezeRewardWeek = (
   records: RewardWeekKidRecord[],
 ): boolean => records.length > 0 && records.some((record) => !record.frozenAt);
+
+export const canUnfreezeRewardWeek = (
+  records: RewardWeekKidRecord[],
+): boolean => records.length > 0 && records.some((record) => Boolean(record.frozenAt));
 
 export const previewFreezeRewardWeek = async (
   partnershipId: string,
@@ -617,7 +660,7 @@ export const resetRewardProgress = async (
   partnershipId: string,
   templateId: string,
 ): Promise<void> => {
-  const records = await getRewardWeekRecords(partnershipId);
+  const records = await getRawRewardWeekRecords(partnershipId);
 
   await Promise.all(
     records.map((record) =>

@@ -4,15 +4,18 @@ import {
   addRewardWeekNote,
   consumeSingleRewardUnit,
   createDefaultRewardsTemplate,
+  canUnfreezeRewardWeek,
   freezeRewardWeek,
   getRewardWeekGroups,
   getRewardWeekRecords,
   getRewardsTemplate,
   instantiateNextRewardWeek,
+  isRewardBoundaryDay,
   openNextRewardWeek,
   resetRewardProgress,
   setKidStepDelta,
   syncCurrentAndFutureRewardWeeksFromTemplate,
+  unfreezeRewardWeek,
   updateRewardsTemplate,
 } from '../rewardServices';
 import { firestoreService } from '../firestore';
@@ -76,11 +79,13 @@ describe('rewardServices', () => {
     const template = await buildTemplate();
 
     const records = await instantiateNextRewardWeek(template);
+    const nextWeekRecords = await instantiateNextRewardWeek(template);
     const groups = await getRewardWeekGroups(template.partnershipId);
 
     expect(records).toHaveLength(2);
     expect(records.every((record) => record.weekOrder === 0)).toBe(true);
-    expect(groups).toHaveLength(1);
+    expect(nextWeekRecords.every((record) => record.weekOrder === 1)).toBe(true);
+    expect(groups).toHaveLength(2);
     expect(groups[0].weekOrder).toBe(0);
     expect(groups[0].kids.map((kid) => kid.kidName)).toEqual(['Ava', 'Ben']);
     expect(records.find((record) => record.kidId === 'kid-a')?.currentStep).toBe(1);
@@ -215,6 +220,7 @@ describe('rewardServices', () => {
   it('can reset reward progress without deleting the template', async () => {
     const template = await buildTemplate();
     await instantiateNextRewardWeek(template);
+    await instantiateNextRewardWeek(template);
 
     await resetRewardProgress(template.partnershipId, template.id);
 
@@ -223,6 +229,27 @@ describe('rewardServices', () => {
 
     expect(records).toHaveLength(0);
     expect(storedTemplate?.currentWeekOrder).toBe(0);
+  });
+
+  it('supports unfreezing the current week', async () => {
+    const template = await buildTemplate();
+    const [record] = await instantiateNextRewardWeek(template);
+
+    await setKidStepDelta(record.id, 1);
+    const frozenRecords = await freezeRewardWeek(template.partnershipId, 0, false);
+
+    expect(canUnfreezeRewardWeek(frozenRecords)).toBe(true);
+
+    const unfrozenRecords = await unfreezeRewardWeek(template.partnershipId, 0);
+    const unfrozenRecord = unfrozenRecords.find((item) => item.id === record.id)!;
+
+    expect(unfrozenRecord.frozenAt).toBeUndefined();
+    expect(unfrozenRecord.earnedRewards).toEqual([]);
+  });
+
+  it('uses the configured boundary day for freeze availability', () => {
+    expect(isRewardBoundaryDay(2, new Date('2026-05-05T12:00:00-07:00'))).toBe(true);
+    expect(isRewardBoundaryDay(1, new Date('2026-05-05T12:00:00-07:00'))).toBe(false);
   });
 
   it('syncs current and future records when title assignments change', async () => {
