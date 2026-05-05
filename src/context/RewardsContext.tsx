@@ -8,6 +8,7 @@ import {
   RewardWeekKidRecord,
 } from '../types';
 import {
+  adjustRewardQuantity,
   addManualRewardToWeek,
   addRewardWeekNote,
   consumeSingleRewardUnit,
@@ -17,17 +18,21 @@ import {
   getRewardsTemplate,
   instantiateNextRewardWeek,
   openNextRewardWeek,
+  resetRewardProgress,
   setKidStepDelta,
   updateRewardAvailability,
   updateRewardWeekKid,
   updateRewardsTemplate,
 } from '../firebase/rewardServices';
 
+type SyncState = 'idle' | 'pending' | 'synced' | 'error';
+
 type RewardsContextType = {
   template: RewardTemplate | null;
   weekGroups: RewardWeekGroup[];
   currentWeek: RewardWeekGroup | null;
   rewardSourceWeek: RewardWeekGroup | null;
+  syncStatusByRecordId: Record<string, SyncState>;
   isLoading: boolean;
   error: string | null;
   loadRewardsData: () => Promise<void>;
@@ -40,6 +45,7 @@ type RewardsContextType = {
   addNote: (recordId: string, type: 'good' | 'bad', text: string) => Promise<void>;
   addManualReward: (recordId: string, reward: RewardDefinition) => Promise<void>;
   consumeReward: (recordId: string, rewardId: string) => Promise<void>;
+  restoreReward: (recordId: string, rewardId: string) => Promise<void>;
   editRewardAvailability: (
     recordId: string,
     rewardId: string,
@@ -47,6 +53,7 @@ type RewardsContextType = {
     remainingAmount?: number,
   ) => Promise<void>;
   saveWeekRecord: (recordId: string, updates: Partial<RewardWeekKidRecord>) => Promise<void>;
+  resetProgress: () => Promise<void>;
 };
 
 const RewardsContext = createContext<RewardsContextType | null>(null);
@@ -64,8 +71,13 @@ export const RewardsProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const { activePartnership } = usePartnership();
   const [template, setTemplate] = useState<RewardTemplate | null>(null);
   const [weekGroups, setWeekGroups] = useState<RewardWeekGroup[]>([]);
+  const [syncStatusByRecordId, setSyncStatusByRecordId] = useState<Record<string, SyncState>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const markSyncState = useCallback((recordId: string, state: SyncState) => {
+    setSyncStatusByRecordId((previous) => ({ ...previous, [recordId]: state }));
+  }, []);
 
   const loadRewardsData = useCallback(async () => {
     if (!activePartnership) {
@@ -85,6 +97,7 @@ export const RewardsProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
       setTemplate(loadedTemplate);
       setWeekGroups(groups);
+      setSyncStatusByRecordId({});
     } catch (err) {
       console.error('Failed to load rewards data', err);
       setError('Failed to load rewards');
@@ -230,15 +243,48 @@ export const RewardsProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const changeKidStep = useCallback(
     async (recordId: string, delta: 1 | -1) => {
+      const existingRecord = weekGroups.flatMap((group) => group.kids).find((record) => record.id === recordId);
+      if (!existingRecord) {
+        return;
+      }
+
+      const nextRecord = { ...existingRecord };
+      const maxStep = nextRecord.levels[nextRecord.currentLevel]?.stepCount || 1;
+
+      if (delta > 0) {
+        if (nextRecord.currentStep < maxStep) {
+          nextRecord.currentStep += 1;
+        } else if (nextRecord.currentLevel < nextRecord.levels.length - 1) {
+          nextRecord.currentLevel += 1;
+          nextRecord.currentStep = 1;
+        }
+      } else if (nextRecord.currentStep > 1) {
+        nextRecord.currentStep -= 1;
+      } else if (nextRecord.currentLevel > 0) {
+        nextRecord.currentLevel -= 1;
+        nextRecord.currentStep = nextRecord.levels[nextRecord.currentLevel].stepCount;
+      }
+
+      nextRecord.updatedAt = Date.now();
+      replaceRecord(nextRecord);
+      markSyncState(recordId, 'pending');
+
       try {
-        const updatedRecord = await setKidStepDelta(recordId, delta);
+        const updatedRecord = await setKidStepDelta(recordId, delta, {
+          currentLevel: existingRecord.currentLevel,
+          currentStep: existingRecord.currentStep,
+          updatedAt: existingRecord.updatedAt,
+        });
         replaceRecord(updatedRecord);
+        markSyncState(recordId, 'synced');
       } catch (err) {
         console.error('Failed to update step', err);
-        setError('Failed to update step');
+        await loadRewardsData();
+        setError(err instanceof Error ? err.message : 'Failed to update step');
+        markSyncState(recordId, 'error');
       }
     },
-    [replaceRecord],
+    [loadRewardsData, markSyncState, replaceRecord, weekGroups],
   );
 
   const addNote = useCallback(
@@ -280,6 +326,27 @@ export const RewardsProvider: React.FC<{ children: React.ReactNode }> = ({ child
     [replaceRecord],
   );
 
+  const restoreReward = useCallback(
+    async (recordId: string, rewardId: string) => {
+      const existingRecord = weekGroups.flatMap((group) => group.kids).find((record) => record.id === recordId);
+      const reward = existingRecord?.earnedRewards.find((item) => item.id === rewardId);
+      if (!reward) {
+        return;
+      }
+
+      try {
+        const updatedRecord = await adjustRewardQuantity(recordId, rewardId, 1, {
+          remainingQuantity: reward.remainingQuantity,
+        });
+        replaceRecord(updatedRecord);
+      } catch (err) {
+        console.error('Failed to restore reward', err);
+        setError('Failed to restore reward');
+      }
+    },
+    [replaceRecord, weekGroups],
+  );
+
   const editRewardAvailability = useCallback(
     async (recordId: string, rewardId: string, remainingQuantity: number, remainingAmount?: number) => {
       try {
@@ -315,6 +382,27 @@ export const RewardsProvider: React.FC<{ children: React.ReactNode }> = ({ child
     [replaceRecord, weekGroups],
   );
 
+  const resetProgress = useCallback(async () => {
+    if (!template) {
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      await resetRewardProgress(template.partnershipId, template.id);
+      setTemplate((previous) => (previous ? { ...previous, currentWeekOrder: 0, updatedAt: Date.now() } : previous));
+      setWeekGroups([]);
+      setSyncStatusByRecordId({});
+    } catch (err) {
+      console.error('Failed to reset rewards progress', err);
+      setError('Failed to reset rewards progress');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [template]);
+
   const currentWeek = useMemo(() => {
     if (!template) {
       return null;
@@ -336,6 +424,7 @@ export const RewardsProvider: React.FC<{ children: React.ReactNode }> = ({ child
     weekGroups,
     currentWeek,
     rewardSourceWeek,
+    syncStatusByRecordId,
     isLoading,
     error,
     loadRewardsData,
@@ -348,8 +437,10 @@ export const RewardsProvider: React.FC<{ children: React.ReactNode }> = ({ child
     addNote,
     addManualReward,
     consumeReward,
+    restoreReward,
     editRewardAvailability,
     saveWeekRecord,
+    resetProgress,
   };
 
   return <RewardsContext.Provider value={value}>{children}</RewardsContext.Provider>;

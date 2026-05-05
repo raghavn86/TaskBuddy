@@ -13,7 +13,6 @@ import {
   Divider,
   Fab,
   FormControl,
-  Grid,
   IconButton,
   InputLabel,
   MenuItem,
@@ -23,32 +22,53 @@ import {
   Tabs,
   TextField,
   Typography,
-  useMediaQuery,
-  useTheme,
 } from '@mui/material';
 import {
   Add as AddIcon,
-  ArrowBack as ArrowBackIcon,
+  AutoAwesome as AutoAwesomeIcon,
+  CheckCircleOutline as SyncedIcon,
   DeleteOutline as DeleteIcon,
   EditOutlined as EditIcon,
-  EmojiEvents as RewardsIcon,
-  KeyboardArrowDown as StepDownIcon,
-  KeyboardArrowUp as StepUpIcon,
-  Settings as SettingsIcon,
+  ErrorOutline as ErrorIcon,
+  MoreHoriz as ActionsIcon,
+  Remove as RemoveIcon,
+  RestartAlt as ResetIcon,
+  Sync as SyncIcon,
+  Tune as EditModeIcon,
 } from '@mui/icons-material';
 import Loading from '../components/common/Loading';
 import { useRewards } from '../context/RewardsContext';
-import { RewardDefinition, RewardInstance, RewardLevel, RewardWeekKidRecord } from '../types';
+import { RewardDefinition, RewardInstance, RewardLevel, RewardNote, RewardWeekGroup, RewardWeekKidRecord } from '../types';
 
-type SurfaceMode = 'execute' | 'rewards' | 'edit';
+type ExecuteTab = 'levels' | 'current' | 'last';
+type SurfaceMode = 'execute' | 'edit';
 type EditSection = 'manage' | 'template';
+type RewardEditorMode = 'template-level' | 'template-standby' | 'week-level' | 'week-manual';
 
 type RewardEditorState = {
-  mode: 'template-level' | 'template-standby' | 'week-level' | 'week-manual';
+  mode: RewardEditorMode;
   recordId?: string;
   levelId?: string;
+  rewardId?: string;
   reward?: RewardDefinition;
 } | null;
+
+type StepDialogState = {
+  scope: 'template' | 'week';
+  levelId: string;
+  levelLabel: string;
+  value: string;
+  recordId?: string;
+} | null;
+
+type KidAccent = {
+  solid: string;
+  soft: string;
+  softBorder: string;
+  towerStrong: string;
+  towerSoft: string;
+  text: string;
+};
 
 const dayOptions = [
   { value: 0, label: 'Sunday' },
@@ -58,6 +78,14 @@ const dayOptions = [
   { value: 4, label: 'Thursday' },
   { value: 5, label: 'Friday' },
   { value: 6, label: 'Saturday' },
+];
+
+const kidAccents: KidAccent[] = [
+  { solid: '#1f6f5f', soft: 'rgba(31,111,95,0.12)', softBorder: 'rgba(31,111,95,0.28)', towerStrong: '#2e8b77', towerSoft: 'rgba(46,139,119,0.18)', text: '#12473c' },
+  { solid: '#b15c1d', soft: 'rgba(177,92,29,0.12)', softBorder: 'rgba(177,92,29,0.28)', towerStrong: '#d47b2c', towerSoft: 'rgba(212,123,44,0.18)', text: '#6e3c11' },
+  { solid: '#5c4ab2', soft: 'rgba(92,74,178,0.12)', softBorder: 'rgba(92,74,178,0.28)', towerStrong: '#7868d8', towerSoft: 'rgba(120,104,216,0.18)', text: '#372c72' },
+  { solid: '#9a314f', soft: 'rgba(154,49,79,0.12)', softBorder: 'rgba(154,49,79,0.28)', towerStrong: '#c44a71', towerSoft: 'rgba(196,74,113,0.18)', text: '#6b1e36' },
+  { solid: '#345f96', soft: 'rgba(52,95,150,0.12)', softBorder: 'rgba(52,95,150,0.28)', towerStrong: '#4e7fbd', towerSoft: 'rgba(78,127,189,0.18)', text: '#1f3b61' },
 ];
 
 const buildDraft = (reward?: RewardDefinition) => ({
@@ -80,16 +108,56 @@ const formatRemaining = (reward: RewardInstance) =>
     ? `${reward.remainingAmount || 0}${reward.amountUnit} left`
     : `${reward.remainingQuantity} left`;
 
-const LevelTower: React.FC<{ levels: RewardLevel[]; currentLevel: number; currentStep: number }> = ({
-  levels,
-  currentLevel,
-  currentStep,
-}) => (
-  <Stack direction="row" spacing={0.75} alignItems="flex-end" sx={{ minHeight: 82 }}>
+const buildPlaceholderReward = (label: string): RewardDefinition => ({
+  id: crypto.randomUUID(),
+  title: `${label} ${Math.floor(Math.random() * 900) + 100}`,
+  quantity: 1,
+});
+
+const dedupeKidRecords = (records: RewardWeekKidRecord[]): RewardWeekKidRecord[] => {
+  const latestByKid = new Map<string, RewardWeekKidRecord>();
+
+  records.forEach((record) => {
+    const existing = latestByKid.get(record.kidId);
+    if (!existing || existing.updatedAt < record.updatedAt) {
+      latestByKid.set(record.kidId, record);
+    }
+  });
+
+  return Array.from(latestByKid.values()).sort((a, b) => a.kidName.localeCompare(b.kidName));
+};
+
+const getKidAccent = (kidId: string): KidAccent => {
+  const hash = kidId.split('').reduce((total, character) => total + character.charCodeAt(0), 0);
+  return kidAccents[hash % kidAccents.length];
+};
+
+const getSyncLabel = (state?: string) => {
+  if (state === 'pending') return 'Pending';
+  if (state === 'error') return 'Retry needed';
+  return 'Synced';
+};
+
+const getSyncIcon = (state?: string) => {
+  if (state === 'pending') return <SyncIcon sx={{ fontSize: 16 }} />;
+  if (state === 'error') return <ErrorIcon sx={{ fontSize: 16 }} />;
+  return <SyncedIcon sx={{ fontSize: 16 }} />;
+};
+
+const formatWeekChip = (group: RewardWeekGroup, currentWeekOrder: number) =>
+  group.weekOrder === currentWeekOrder ? 'Current' : `W${group.weekOrder + 1}`;
+
+const LevelTower: React.FC<{
+  levels: RewardLevel[];
+  currentLevel: number;
+  currentStep: number;
+  accent: KidAccent;
+}> = ({ levels, currentLevel, currentStep, accent }) => (
+  <Stack direction="row" spacing={0.85} alignItems="flex-end" sx={{ minHeight: 108 }}>
     {levels.map((level, index) => {
       const isCurrent = index === currentLevel;
       const isUnlocked = index <= currentLevel;
-      const height = 36 + index * 10;
+      const height = 42 + index * 13;
       return (
         <Box
           key={level.id}
@@ -97,25 +165,26 @@ const LevelTower: React.FC<{ levels: RewardLevel[]; currentLevel: number; curren
             flex: 1,
             minWidth: 0,
             height,
-            borderRadius: 2.5,
+            borderRadius: '16px 16px 8px 8px',
             border: '1px solid',
-            borderColor: isCurrent ? 'primary.main' : isUnlocked ? 'primary.light' : 'divider',
+            borderColor: isCurrent ? accent.solid : isUnlocked ? accent.softBorder : 'divider',
             background: isCurrent
-              ? 'linear-gradient(180deg, #42a5f5 0%, #1976d2 100%)'
+              ? `linear-gradient(180deg, ${accent.towerStrong} 0%, ${accent.solid} 100%)`
               : isUnlocked
-                ? 'linear-gradient(180deg, rgba(66,165,245,0.28) 0%, rgba(25,118,210,0.12) 100%)'
-                : 'linear-gradient(180deg, rgba(255,255,255,0.8) 0%, rgba(220,220,220,0.4) 100%)',
-            color: isCurrent ? 'common.white' : 'text.primary',
+                ? `linear-gradient(180deg, ${accent.soft} 0%, ${accent.towerSoft} 100%)`
+                : 'linear-gradient(180deg, rgba(255,255,255,0.92) 0%, rgba(230,230,230,0.48) 100%)',
+            color: isCurrent ? '#fff' : accent.text,
             display: 'flex',
             flexDirection: 'column',
             justifyContent: 'space-between',
-            p: 0.75,
-            boxShadow: isCurrent ? '0 10px 18px rgba(25, 118, 210, 0.22)' : 'none',
-            transform: isCurrent ? 'translateY(-4px)' : 'none',
+            px: 0.75,
+            py: 0.7,
+            boxShadow: isCurrent ? `0 14px 20px ${accent.softBorder}` : 'none',
+            transform: isCurrent ? 'translateY(-5px)' : 'none',
             transition: 'all 180ms ease',
           }}
         >
-          <Typography variant="caption" sx={{ fontWeight: 700, lineHeight: 1 }}>
+          <Typography variant="caption" sx={{ fontWeight: 800, lineHeight: 1 }}>
             {index + 1}
           </Typography>
           {isCurrent ? (
@@ -127,7 +196,7 @@ const LevelTower: React.FC<{ levels: RewardLevel[]; currentLevel: number; curren
                     width: 6,
                     height: 6,
                     borderRadius: '50%',
-                    backgroundColor: dotIndex < currentStep ? 'common.white' : 'rgba(255,255,255,0.35)',
+                    backgroundColor: dotIndex < currentStep ? '#fff' : 'rgba(255,255,255,0.35)',
                   }}
                 />
               ))}
@@ -147,6 +216,7 @@ const Rewards: React.FC = () => {
     weekGroups,
     currentWeek,
     rewardSourceWeek,
+    syncStatusByRecordId,
     isLoading,
     error,
     createTemplate,
@@ -158,15 +228,15 @@ const Rewards: React.FC = () => {
     addNote,
     addManualReward,
     consumeReward,
+    restoreReward,
     editRewardAvailability,
     saveWeekRecord,
+    resetProgress,
   } = useRewards();
-  const theme = useTheme();
-  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
 
   const [surfaceMode, setSurfaceMode] = useState<SurfaceMode>('execute');
+  const [executeTab, setExecuteTab] = useState<ExecuteTab>('levels');
   const [editSection, setEditSection] = useState<EditSection>('manage');
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [manageWeek, setManageWeek] = useState(0);
   const [kidName, setKidName] = useState('');
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
@@ -176,18 +246,30 @@ const Rewards: React.FC = () => {
     null,
   );
   const [availabilityDraft, setAvailabilityDraft] = useState({ quantity: '0', amount: '' });
+  const [stepDialog, setStepDialog] = useState<StepDialogState>(null);
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
 
   const orderedWeeks = useMemo(() => [...weekGroups].sort((a, b) => a.weekOrder - b.weekOrder), [weekGroups]);
-  const selectedManageGroup = orderedWeeks.find((group) => group.weekOrder === manageWeek) || orderedWeeks[0] || null;
-  const rewardSourceByKid = useMemo(() => {
-    const map = new Map<string, RewardWeekKidRecord>();
-    rewardSourceWeek?.kids.forEach((kid) => map.set(kid.kidId, kid));
-    return map;
-  }, [rewardSourceWeek]);
+  const visibleCurrentKids = useMemo(() => dedupeKidRecords(currentWeek?.kids || []), [currentWeek?.kids]);
+  const visibleRewardSourceKids = useMemo(() => dedupeKidRecords(rewardSourceWeek?.kids || []), [rewardSourceWeek?.kids]);
+  const selectedManageGroup =
+    orderedWeeks.find((group) => group.weekOrder === manageWeek) || orderedWeeks[0] || null;
+  const visibleManageKids = useMemo(
+    () => dedupeKidRecords(selectedManageGroup?.kids || []),
+    [selectedManageGroup?.kids],
+  );
 
   useEffect(() => {
     setManageWeek(template?.currentWeekOrder || 0);
   }, [template?.currentWeekOrder]);
+
+  const canOpenNextWeek = Boolean(
+    template &&
+      visibleCurrentKids.length > 0 &&
+      visibleCurrentKids.every((record) => Boolean(record.frozenAt)) &&
+      orderedWeeks.some((group) => group.weekOrder === template.currentWeekOrder + 1),
+  );
 
   const toReward = (): RewardDefinition => ({
     id: rewardDraft.id,
@@ -213,7 +295,12 @@ const Rewards: React.FC = () => {
     if (!reward.title) return;
 
     if (rewardDialog.mode === 'week-manual' && rewardDialog.recordId) {
-      await addManualReward(rewardDialog.recordId, reward);
+      const record = orderedWeeks.flatMap((group) => group.kids).find((item) => item.id === rewardDialog.recordId);
+      if (!record) return;
+      const manualRewards = rewardDialog.rewardId
+        ? record.manualRewards.map((item) => (item.id === rewardDialog.rewardId ? { ...item, ...reward } : item))
+        : [...record.manualRewards, { ...reward, remainingQuantity: reward.quantity, source: 'manual' as const }];
+      await saveWeekRecord(record.id, { manualRewards });
       setRewardDialog(null);
       return;
     }
@@ -261,82 +348,215 @@ const Rewards: React.FC = () => {
     }
   };
 
-  const renderEditableLevels = (
-    levels: RewardLevel[],
-    onLevelChange: (levelId: string, updates: Partial<RewardLevel>) => void,
-    onAddReward: (levelId: string) => void,
-    onEditReward: (levelId: string, reward: RewardDefinition) => void,
-    onRemoveReward: (levelId: string, rewardId: string) => void,
+  const addPlaceholderReward = async (
+    target:
+      | { kind: 'template-level'; levelId: string }
+      | { kind: 'template-standby' }
+      | { kind: 'week-level'; recordId: string; levelId: string }
+      | { kind: 'week-manual'; recordId: string },
+  ) => {
+    if (!template) return;
+    const reward = buildPlaceholderReward('Reward');
+
+    if (target.kind === 'template-standby') {
+      await saveTemplate({ standbyRewards: [...template.standbyRewards, reward] });
+      return;
+    }
+
+    if (target.kind === 'template-level') {
+      const levels = template.levels.map((level) =>
+        level.id === target.levelId ? { ...level, rewards: [...level.rewards, reward] } : level,
+      );
+      await saveTemplate({ levels });
+      return;
+    }
+
+    if (target.kind === 'week-manual') {
+      await addManualReward(target.recordId, reward);
+      return;
+    }
+
+    const record = orderedWeeks.flatMap((group) => group.kids).find((item) => item.id === target.recordId);
+    if (!record) return;
+    const levels = record.levels.map((level) =>
+      level.id === target.levelId ? { ...level, rewards: [...level.rewards, reward] } : level,
+    );
+    await updateWeekLevels(record.id, levels);
+  };
+
+  const removeTemplateStandbyReward = async (rewardId: string) => {
+    if (!template) return;
+    await saveTemplate({ standbyRewards: template.standbyRewards.filter((item) => item.id !== rewardId) });
+  };
+
+  const removeTemplateLevelReward = async (levelId: string, rewardId: string) => {
+    if (!template) return;
+    const levels = template.levels.map((level) =>
+      level.id === levelId ? { ...level, rewards: level.rewards.filter((reward) => reward.id !== rewardId) } : level,
+    );
+    await saveTemplate({ levels });
+  };
+
+  const removeWeekLevelReward = async (recordId: string, levelId: string, rewardId: string) => {
+    const record = orderedWeeks.flatMap((group) => group.kids).find((item) => item.id === recordId);
+    if (!record) return;
+    const levels = record.levels.map((level) =>
+      level.id === levelId ? { ...level, rewards: level.rewards.filter((reward) => reward.id !== rewardId) } : level,
+    );
+    await updateWeekLevels(record.id, levels);
+  };
+
+  const removeManualReward = async (recordId: string, rewardId: string) => {
+    const record = orderedWeeks.flatMap((group) => group.kids).find((item) => item.id === recordId);
+    if (!record) return;
+    await saveWeekRecord(recordId, {
+      manualRewards: record.manualRewards.filter((reward) => reward.id !== rewardId),
+    });
+  };
+
+  const saveStepCount = async () => {
+    if (!stepDialog || !template) return;
+    const nextStepCount = Math.max(1, Number(stepDialog.value) || 1);
+
+    if (stepDialog.scope === 'template') {
+      const levels = template.levels.map((level) =>
+        level.id === stepDialog.levelId ? { ...level, stepCount: nextStepCount } : level,
+      );
+      await saveTemplate({ levels });
+    } else if (stepDialog.recordId) {
+      const record = orderedWeeks.flatMap((group) => group.kids).find((item) => item.id === stepDialog.recordId);
+      if (!record) return;
+      const levels = record.levels.map((level) =>
+        level.id === stepDialog.levelId ? { ...level, stepCount: nextStepCount } : level,
+      );
+      await updateWeekLevels(record.id, levels);
+    }
+
+    setStepDialog(null);
+  };
+
+  const renderRewardRow = (
+    reward: RewardDefinition,
+    onEdit: () => void,
+    onDelete: () => void,
+    muted = false,
   ) => (
-    <Stack spacing={1.5}>
-      {levels.map((level) => (
-        <Card key={level.id} variant="outlined" sx={{ borderRadius: 3 }}>
-          <CardContent sx={{ py: 1.25, '&:last-child': { pb: 1.25 } }}>
-            <Grid container spacing={1}>
-              <Grid item xs={8}>
-                <TextField
-                  fullWidth
+    <Box
+      key={reward.id}
+      sx={{
+        py: 0.75,
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'flex-start',
+        gap: 1,
+        opacity: muted ? 0.48 : 1,
+      }}
+    >
+      <Box sx={{ minWidth: 0 }}>
+        <Typography variant="body2">{formatReward(reward)}</Typography>
+        {reward.description && (
+          <Typography variant="caption" color="text.secondary">
+            {reward.description}
+          </Typography>
+        )}
+      </Box>
+      <Stack direction="row" spacing={0.25}>
+        <IconButton size="small" onClick={onEdit}>
+          <EditIcon fontSize="small" />
+        </IconButton>
+        <IconButton size="small" onClick={onDelete}>
+          <DeleteIcon fontSize="small" />
+        </IconButton>
+      </Stack>
+    </Box>
+  );
+
+  const renderLevelSections = (
+    levels: RewardLevel[],
+    options: {
+      scope: 'template' | 'week';
+      recordId?: string;
+      currentLevel?: number;
+      currentStep?: number;
+      showLockedState?: boolean;
+    },
+  ) => (
+    <Stack divider={<Divider flexItem />} sx={{ borderTop: '1px solid', borderColor: 'divider' }}>
+      {levels.map((level, index) => {
+        const isLocked = options.showLockedState ? index > (options.currentLevel ?? -1) : false;
+        const levelLabel = `Level ${index + 1}`;
+
+        return (
+          <Box key={level.id} sx={{ py: 1.5 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1 }}>
+              <Box>
+                <Typography variant="subtitle2">{levelLabel}</Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {level.stepCount} steps
+                  {options.showLockedState && index === options.currentLevel
+                    ? ` · current step ${options.currentStep}/${level.stepCount}`
+                    : isLocked
+                      ? ' · locked'
+                      : ' · unlocked'}
+                </Typography>
+              </Box>
+              <Stack direction="row" spacing={0.5} alignItems="center">
+                <IconButton
                   size="small"
-                  label="Level"
-                  value={level.name}
-                  onChange={(event) => onLevelChange(level.id, { name: event.target.value })}
-                />
-              </Grid>
-              <Grid item xs={4}>
-                <TextField
-                  fullWidth
-                  size="small"
-                  label="Steps"
-                  type="number"
-                  value={level.stepCount}
-                  onChange={(event) =>
-                    onLevelChange(level.id, { stepCount: Math.max(1, Number(event.target.value) || 1) })
+                  onClick={() =>
+                    setStepDialog({
+                      scope: options.scope,
+                      recordId: options.recordId,
+                      levelId: level.id,
+                      levelLabel,
+                      value: String(level.stepCount),
+                    })
                   }
-                />
-              </Grid>
-            </Grid>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 1 }}>
-              <Typography variant="caption" color="text.secondary">
-                Rewards
-              </Typography>
-              <Button size="small" onClick={() => onAddReward(level.id)}>
-                Add reward
-              </Button>
+                >
+                  <EditIcon fontSize="small" />
+                </IconButton>
+                <Button
+                  size="small"
+                  onClick={() =>
+                    void addPlaceholderReward(
+                      options.scope === 'template'
+                        ? { kind: 'template-level', levelId: level.id }
+                        : { kind: 'week-level', recordId: options.recordId!, levelId: level.id },
+                    )
+                  }
+                >
+                  Add reward
+                </Button>
+              </Stack>
             </Box>
-            <Stack spacing={0.75} sx={{ mt: 1 }}>
-              {level.rewards.map((reward) => (
-                <Card key={reward.id} variant="outlined">
-                  <CardContent sx={{ py: 1, '&:last-child': { pb: 1 } }}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
-                      <Box>
-                        <Typography variant="body2">{formatReward(reward)}</Typography>
-                        {reward.description && (
-                          <Typography variant="caption" color="text.secondary">
-                            {reward.description}
-                          </Typography>
-                        )}
-                      </Box>
-                      <Stack direction="row" spacing={0.25}>
-                        <IconButton size="small" onClick={() => onEditReward(level.id, reward)}>
-                          <EditIcon fontSize="small" />
-                        </IconButton>
-                        <IconButton size="small" onClick={() => onRemoveReward(level.id, reward.id)}>
-                          <DeleteIcon fontSize="small" />
-                        </IconButton>
-                      </Stack>
-                    </Box>
-                  </CardContent>
-                </Card>
-              ))}
-              {level.rewards.length === 0 && (
-                <Typography variant="body2" color="text.secondary">
+            <Box sx={{ mt: 1 }}>
+              {level.rewards.length === 0 ? (
+                <Typography variant="body2" color="text.secondary" sx={{ opacity: isLocked ? 0.48 : 1 }}>
                   No rewards on this level.
                 </Typography>
+              ) : (
+                level.rewards.map((reward) =>
+                  renderRewardRow(
+                    reward,
+                    () =>
+                      openRewardEditor({
+                        mode: options.scope === 'template' ? 'template-level' : 'week-level',
+                        recordId: options.recordId,
+                        levelId: level.id,
+                        reward,
+                      }),
+                    () =>
+                      void (options.scope === 'template'
+                        ? removeTemplateLevelReward(level.id, reward.id)
+                        : removeWeekLevelReward(options.recordId!, level.id, reward.id)),
+                    isLocked,
+                  ),
+                )
               )}
-            </Stack>
-          </CardContent>
-        </Card>
-      ))}
+            </Box>
+          </Box>
+        );
+      })}
     </Stack>
   );
 
@@ -363,29 +583,14 @@ const Rewards: React.FC = () => {
     );
   }
 
-  const topSummary = (
-    <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
-      <Chip
-        size="small"
-        color="primary"
-        label={currentWeek ? `Tracking ${currentWeek.weekOrder + 1}W` : 'No active week'}
-      />
-      <Chip
-        size="small"
-        variant="outlined"
-        label={rewardSourceWeek ? `Rewards ${rewardSourceWeek.weekOrder + 1}W` : 'No reward bank yet'}
-      />
-    </Stack>
-  );
-
   return (
     <Box
       sx={{
-        pb: 4,
+        pb: 9,
         minHeight: '100%',
         background:
           surfaceMode === 'execute'
-            ? 'linear-gradient(180deg, rgba(25,118,210,0.08) 0%, rgba(255,255,255,0) 32%)'
+            ? 'linear-gradient(180deg, rgba(24,83,120,0.08) 0%, rgba(255,255,255,0) 28%)'
             : 'transparent',
       }}
     >
@@ -397,25 +602,32 @@ const Rewards: React.FC = () => {
           <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
             Boundary day: {dayOptions.find((day) => day.value === template.weekBoundaryDay)?.label}
           </Typography>
-          {topSummary}
+          <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
+            <Chip
+              size="small"
+              color="primary"
+              label={currentWeek ? `${formatWeekChip(currentWeek, template.currentWeekOrder)} · tracking` : 'No active week'}
+            />
+            <Chip
+              size="small"
+              variant="outlined"
+              label={rewardSourceWeek ? `Last rewards · W${rewardSourceWeek.weekOrder + 1}` : 'No last-week rewards'}
+            />
+          </Stack>
         </Box>
-        <IconButton
+        <Button
+          variant={surfaceMode === 'edit' ? 'contained' : 'outlined'}
+          startIcon={<EditModeIcon />}
           onClick={() => {
-            if (surfaceMode === 'edit') {
-              setSurfaceMode('execute');
-            } else {
-              setSettingsOpen(true);
+            setSurfaceMode(surfaceMode === 'edit' ? 'execute' : 'edit');
+            if (surfaceMode !== 'edit') {
+              setEditSection('manage');
             }
           }}
-          sx={{
-            mt: 0.5,
-            backgroundColor: 'background.paper',
-            border: '1px solid',
-            borderColor: 'divider',
-          }}
+          sx={{ borderRadius: 999 }}
         >
-          {surfaceMode === 'edit' ? <ArrowBackIcon /> : <SettingsIcon />}
-        </IconButton>
+          {surfaceMode === 'edit' ? 'Back To Daily' : 'Edit'}
+        </Button>
       </Box>
 
       {error && (
@@ -423,255 +635,337 @@ const Rewards: React.FC = () => {
           {error}
         </Alert>
       )}
+
       {surfaceMode === 'execute' && (
         <Stack spacing={2}>
-          {!currentWeek ? (
-            <Alert severity="info">Instantiate the first week to start tracking rewards.</Alert>
-          ) : (
-            currentWeek.kids.map((record) => (
-              <Card
-                key={record.id}
-                sx={{
-                  borderRadius: 4,
-                  overflow: 'hidden',
-                  background:
-                    'linear-gradient(180deg, rgba(255,255,255,1) 0%, rgba(245,249,255,1) 100%)',
-                }}
-              >
-                <CardContent sx={{ p: 2 }}>
-                  <Stack spacing={1.75}>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1 }}>
-                      <Box>
-                        <Typography variant="h6">{record.kidName}</Typography>
-                        <Typography variant="body2" color="text.secondary">
-                          {record.levels[record.currentLevel]?.name || 'No level'} · Step {record.currentStep}/
-                          {record.levels[record.currentLevel]?.stepCount || 1}
-                        </Typography>
-                      </Box>
-                      <Chip
-                        size="small"
-                        label={`L${record.currentLevel + 1}`}
-                        sx={{ fontWeight: 700, backgroundColor: 'rgba(25,118,210,0.12)', color: 'primary.dark' }}
-                      />
-                    </Box>
-                    <LevelTower
-                      levels={record.levels}
-                      currentLevel={record.currentLevel}
-                      currentStep={record.currentStep}
-                    />
-                    <Grid container spacing={1.25}>
-                      <Grid item xs={6}>
-                        <Button
-                          fullWidth
-                          variant="outlined"
-                          color="inherit"
-                          startIcon={<StepDownIcon />}
-                          onClick={() => void changeKidStep(record.id, -1)}
-                          sx={{
-                            py: 1.1,
-                            borderRadius: 3,
-                            borderColor: 'rgba(15, 23, 42, 0.12)',
-                            backgroundColor: 'rgba(255,255,255,0.92)',
-                          }}
-                        >
-                          Step Down
-                        </Button>
-                      </Grid>
-                      <Grid item xs={6}>
-                        <Button
-                          fullWidth
-                          variant="contained"
-                          startIcon={<StepUpIcon />}
-                          onClick={() => void changeKidStep(record.id, 1)}
-                          sx={{
-                            py: 1.1,
-                            borderRadius: 3,
-                            boxShadow: '0 10px 18px rgba(25, 118, 210, 0.24)',
-                          }}
-                        >
-                          Step Up
-                        </Button>
-                      </Grid>
-                    </Grid>
-                  </Stack>
-                </CardContent>
-              </Card>
-            ))
+          <Tabs
+            value={executeTab}
+            onChange={(_event, value) => setExecuteTab(value)}
+            variant="fullWidth"
+            sx={{
+              minHeight: 40,
+              '& .MuiTab-root': { minHeight: 40, textTransform: 'none', fontWeight: 600 },
+            }}
+          >
+            <Tab label="Levels" value="levels" />
+            <Tab label="This Week" value="current" />
+            <Tab label="Last Week" value="last" />
+          </Tabs>
+
+          {executeTab === 'levels' && (
+            <>
+              {visibleCurrentKids.length === 0 ? (
+                <Alert severity="info">Instantiate the first week to start tracking rewards.</Alert>
+              ) : (
+                visibleCurrentKids.map((record) => {
+                  const accent = getKidAccent(record.kidId);
+                  const syncState = syncStatusByRecordId[record.id];
+                  return (
+                    <Card
+                      key={record.id}
+                      sx={{
+                        borderRadius: 4,
+                        overflow: 'hidden',
+                        border: '1px solid',
+                        borderColor: accent.softBorder,
+                        background: `linear-gradient(180deg, ${accent.soft} 0%, rgba(255,255,255,0.98) 88%)`,
+                      }}
+                    >
+                      <CardContent sx={{ p: 2 }}>
+                        <Stack spacing={1.75}>
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1 }}>
+                            <Box>
+                              <Typography variant="h6" sx={{ color: accent.text }}>
+                                {record.kidName}
+                              </Typography>
+                              <Typography variant="body2" color="text.secondary">
+                                Level {record.currentLevel + 1} · Step {record.currentStep}/
+                                {record.levels[record.currentLevel]?.stepCount || 1}
+                              </Typography>
+                            </Box>
+                            <Chip
+                              size="small"
+                              icon={getSyncIcon(syncState)}
+                              label={getSyncLabel(syncState)}
+                              sx={{
+                                backgroundColor: syncState === 'error' ? 'rgba(211,47,47,0.08)' : accent.soft,
+                                color: syncState === 'error' ? 'error.main' : accent.text,
+                              }}
+                            />
+                          </Box>
+                          <LevelTower
+                            levels={record.levels}
+                            currentLevel={record.currentLevel}
+                            currentStep={record.currentStep}
+                            accent={accent}
+                          />
+                          <Stack direction="row" spacing={1.25}>
+                            <Button
+                              fullWidth
+                              variant="outlined"
+                              onClick={() => void changeKidStep(record.id, -1)}
+                              sx={{
+                                py: 1,
+                                minWidth: 0,
+                                borderRadius: 3,
+                                borderColor: accent.softBorder,
+                                color: accent.text,
+                                backgroundColor: '#fff',
+                                fontSize: 22,
+                                fontWeight: 800,
+                              }}
+                            >
+                              -
+                            </Button>
+                            <Button
+                              fullWidth
+                              variant="contained"
+                              onClick={() => void changeKidStep(record.id, 1)}
+                              sx={{
+                                py: 1,
+                                minWidth: 0,
+                                borderRadius: 3,
+                                backgroundColor: accent.solid,
+                                boxShadow: `0 14px 20px ${accent.softBorder}`,
+                                fontSize: 22,
+                                fontWeight: 800,
+                                '&:hover': { backgroundColor: accent.solid },
+                              }}
+                            >
+                              +
+                            </Button>
+                          </Stack>
+                        </Stack>
+                      </CardContent>
+                    </Card>
+                  );
+                })
+              )}
+            </>
           )}
-        </Stack>
-      )}
 
-      {surfaceMode === 'rewards' && (
-        <Stack spacing={2}>
-          <Card sx={{ borderRadius: 4 }}>
-            <CardContent sx={{ p: 2 }}>
-              <Typography variant="subtitle1" gutterBottom>
-                Reward Bank
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                Frozen rewards are used during the following week. Manual rewards and notes stay separate.
-              </Typography>
-            </CardContent>
-          </Card>
+          {executeTab === 'current' && (
+            <>
+              {visibleCurrentKids.length === 0 ? (
+                <Alert severity="info">Instantiate the first week to start tracking rewards.</Alert>
+              ) : (
+                visibleCurrentKids.map((record) => {
+                  const accent = getKidAccent(record.kidId);
+                  return (
+                    <Card key={record.id} sx={{ borderRadius: 4, border: '1px solid', borderColor: accent.softBorder }}>
+                      <CardContent sx={{ p: 2 }}>
+                        <Stack spacing={2}>
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1 }}>
+                            <Box>
+                              <Typography variant="h6" sx={{ color: accent.text }}>
+                                {record.kidName}
+                              </Typography>
+                              <Typography variant="body2" color="text.secondary">
+                                Current setup for week {record.weekOrder + 1}
+                              </Typography>
+                            </Box>
+                            <Chip size="small" label={`Level ${record.currentLevel + 1}`} sx={{ backgroundColor: accent.soft, color: accent.text }} />
+                          </Box>
 
-          {!rewardSourceWeek ? (
-            <Alert severity="info">Freeze a week to open its rewards for use in the following week.</Alert>
-          ) : (
-            rewardSourceWeek.kids.map((rewardRecord) => {
-              const liveWeekRecord = currentWeek?.kids.find((kid) => kid.kidId === rewardRecord.kidId);
-              return (
-                <Card key={rewardRecord.id} sx={{ borderRadius: 4 }}>
-                  <CardContent sx={{ p: 2 }}>
-                    <Stack spacing={2}>
-                      <Box>
-                        <Typography variant="h6">{rewardRecord.kidName}</Typography>
-                        <Typography variant="body2" color="text.secondary">
-                          Rewards from week {rewardRecord.weekOrder + 1}
-                        </Typography>
-                      </Box>
+                          <Box>
+                            <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                              Level Rewards
+                            </Typography>
+                            {renderLevelSections(record.levels, {
+                              scope: 'week',
+                              recordId: record.id,
+                              currentLevel: record.currentLevel,
+                              currentStep: record.currentStep,
+                              showLockedState: true,
+                            })}
+                          </Box>
 
-                      <Box>
-                        <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                          Available Rewards
-                        </Typography>
-                        {rewardRecord.earnedRewards.length === 0 ? (
-                          <Typography variant="body2" color="text.secondary">
-                            No rewards available.
-                          </Typography>
-                        ) : (
-                          <Stack spacing={1}>
-                            {rewardRecord.earnedRewards.map((reward) => (
-                              <Card key={reward.id} variant="outlined">
-                                <CardContent sx={{ py: 1.1, '&:last-child': { pb: 1.1 } }}>
-                                  <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
-                                    <Box>
-                                      <Typography variant="body2">{formatReward(reward)}</Typography>
-                                      <Typography variant="caption" color="text.secondary">
-                                        {formatRemaining(reward)}
-                                        {reward.isCarryForward ? ' · Carry forward' : ''}
-                                      </Typography>
-                                    </Box>
-                                    <Stack direction="row" spacing={0.5}>
-                                      {reward.amount === undefined && (
-                                        <Button
-                                          size="small"
-                                          onClick={() => void consumeReward(rewardRecord.id, reward.id)}
-                                          disabled={reward.remainingQuantity <= 0}
-                                        >
-                                          Use
-                                        </Button>
-                                      )}
+                          <Divider />
+
+                          <Box>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                              <Typography variant="subtitle2">Manual Rewards</Typography>
+                              <Button size="small" onClick={() => void addPlaceholderReward({ kind: 'week-manual', recordId: record.id })}>
+                                Add reward
+                              </Button>
+                            </Box>
+                            {record.manualRewards.length === 0 ? (
+                              <Chip size="small" variant="outlined" label="No manual rewards yet" />
+                            ) : (
+                              <Stack spacing={0.5}>
+                                {record.manualRewards.map((reward) =>
+                                  renderRewardRow(
+                                    reward,
+                                    () =>
+                                      openRewardEditor({
+                                        mode: 'week-manual',
+                                        recordId: record.id,
+                                        rewardId: reward.id,
+                                        reward,
+                                      }),
+                                    () => void removeManualReward(record.id, reward.id),
+                                  ),
+                                )}
+                              </Stack>
+                            )}
+                          </Box>
+
+                          <Divider />
+
+                          <Box>
+                            <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                              Notes
+                            </Typography>
+                            <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
+                              <TextField
+                                size="small"
+                                fullWidth
+                                placeholder="Log something good or bad"
+                                value={noteDrafts[record.id] || ''}
+                                onChange={(event) =>
+                                  setNoteDrafts((previous) => ({
+                                    ...previous,
+                                    [record.id]: event.target.value,
+                                  }))
+                                }
+                              />
+                              <Button
+                                size="small"
+                                color="success"
+                                onClick={() => {
+                                  const text = (noteDrafts[record.id] || '').trim();
+                                  if (!text) return;
+                                  void addNote(record.id, 'good', text);
+                                  setNoteDrafts((previous) => ({ ...previous, [record.id]: '' }));
+                                }}
+                              >
+                                Good
+                              </Button>
+                              <Button
+                                size="small"
+                                color="warning"
+                                onClick={() => {
+                                  const text = (noteDrafts[record.id] || '').trim();
+                                  if (!text) return;
+                                  void addNote(record.id, 'bad', text);
+                                  setNoteDrafts((previous) => ({ ...previous, [record.id]: '' }));
+                                }}
+                              >
+                                Bad
+                              </Button>
+                            </Stack>
+                            {record.notes.length === 0 ? (
+                              <Chip size="small" variant="outlined" label="No notes yet" />
+                            ) : (
+                              <Stack spacing={0.75}>
+                                {record.notes.map((note: RewardNote) => (
+                                  <Chip
+                                    key={note.id}
+                                    size="small"
+                                    color={note.type === 'good' ? 'success' : 'warning'}
+                                    variant="outlined"
+                                    label={`${note.type === 'good' ? 'Good' : 'Bad'} · ${note.text}`}
+                                    sx={{ justifyContent: 'flex-start' }}
+                                  />
+                                ))}
+                              </Stack>
+                            )}
+                          </Box>
+                        </Stack>
+                      </CardContent>
+                    </Card>
+                  );
+                })
+              )}
+            </>
+          )}
+
+          {executeTab === 'last' && (
+            <>
+              {visibleRewardSourceKids.length === 0 ? (
+                <Alert severity="info">Freeze a week to open its rewards for use in the following week.</Alert>
+              ) : (
+                visibleRewardSourceKids.map((record) => {
+                  const accent = getKidAccent(record.kidId);
+                  return (
+                    <Card key={record.id} sx={{ borderRadius: 4, border: '1px solid', borderColor: accent.softBorder }}>
+                      <CardContent sx={{ p: 2 }}>
+                        <Stack spacing={1.5}>
+                          <Box>
+                            <Typography variant="h6" sx={{ color: accent.text }}>
+                              {record.kidName}
+                            </Typography>
+                            <Typography variant="body2" color="text.secondary">
+                              Rewards from week {record.weekOrder + 1}
+                            </Typography>
+                          </Box>
+                          {record.earnedRewards.length === 0 ? (
+                            <Typography variant="body2" color="text.secondary">
+                              No rewards available.
+                            </Typography>
+                          ) : (
+                            record.earnedRewards.map((reward) => (
+                              <Box
+                                key={reward.id}
+                                sx={{
+                                  py: 1,
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  alignItems: 'flex-start',
+                                  gap: 1,
+                                  borderTop: '1px solid',
+                                  borderColor: 'divider',
+                                }}
+                              >
+                                <Box sx={{ minWidth: 0 }}>
+                                  <Typography variant="body2">{formatReward(reward)}</Typography>
+                                  <Typography variant="caption" color="text.secondary">
+                                    {formatRemaining(reward)}
+                                    {reward.isCarryForward ? ' · Carry forward' : ''}
+                                  </Typography>
+                                </Box>
+                                <Stack direction="row" spacing={0.5} alignItems="center">
+                                  {reward.amount === undefined ? (
+                                    <>
                                       <IconButton
                                         size="small"
-                                        onClick={() => {
-                                          setAvailabilityDialog({ recordId: rewardRecord.id, reward });
-                                          setAvailabilityDraft({
-                                            quantity: String(reward.remainingQuantity),
-                                            amount:
-                                              reward.remainingAmount === undefined ? '' : String(reward.remainingAmount),
-                                          });
-                                        }}
+                                        onClick={() => void consumeReward(record.id, reward.id)}
+                                        disabled={reward.remainingQuantity <= 0}
                                       >
-                                        <EditIcon fontSize="small" />
+                                        <RemoveIcon fontSize="small" />
                                       </IconButton>
-                                    </Stack>
-                                  </Box>
-                                </CardContent>
-                              </Card>
-                            ))}
-                          </Stack>
-                        )}
-                      </Box>
-
-                      <Divider />
-
-                      <Box>
-                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-                          <Typography variant="subtitle2">Manual Rewards</Typography>
-                          {liveWeekRecord && (
-                            <Button
-                              size="small"
-                              onClick={() => openRewardEditor({ mode: 'week-manual', recordId: liveWeekRecord.id })}
-                            >
-                              Add
-                            </Button>
-                          )}
-                        </Box>
-                        <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
-                          {!liveWeekRecord || liveWeekRecord.manualRewards.length === 0 ? (
-                            <Chip size="small" variant="outlined" label="No manual rewards" />
-                          ) : (
-                            liveWeekRecord.manualRewards.map((reward) => (
-                              <Chip key={reward.id} size="small" label={formatReward(reward)} />
+                                      <IconButton
+                                        size="small"
+                                        onClick={() => void restoreReward(record.id, reward.id)}
+                                        disabled={reward.remainingQuantity >= reward.quantity}
+                                      >
+                                        <AddIcon fontSize="small" />
+                                      </IconButton>
+                                    </>
+                                  ) : null}
+                                  <IconButton
+                                    size="small"
+                                    onClick={() => {
+                                      setAvailabilityDialog({ recordId: record.id, reward });
+                                      setAvailabilityDraft({
+                                        quantity: String(reward.remainingQuantity),
+                                        amount: reward.remainingAmount === undefined ? '' : String(reward.remainingAmount),
+                                      });
+                                    }}
+                                  >
+                                    <EditIcon fontSize="small" />
+                                  </IconButton>
+                                </Stack>
+                              </Box>
                             ))
                           )}
                         </Stack>
-                      </Box>
-
-                      <Box>
-                        <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                          Notes
-                        </Typography>
-                        {liveWeekRecord && (
-                          <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
-                            <TextField
-                              size="small"
-                              fullWidth
-                              placeholder="Log something good or bad"
-                              value={noteDrafts[liveWeekRecord.id] || ''}
-                              onChange={(event) =>
-                                setNoteDrafts((previous) => ({
-                                  ...previous,
-                                  [liveWeekRecord.id]: event.target.value,
-                                }))
-                              }
-                            />
-                            <Button
-                              size="small"
-                              onClick={() => {
-                                const text = (noteDrafts[liveWeekRecord.id] || '').trim();
-                                if (!text) return;
-                                void addNote(liveWeekRecord.id, 'good', text);
-                                setNoteDrafts((previous) => ({ ...previous, [liveWeekRecord.id]: '' }));
-                              }}
-                            >
-                              Good
-                            </Button>
-                            <Button
-                              size="small"
-                              color="warning"
-                              onClick={() => {
-                                const text = (noteDrafts[liveWeekRecord.id] || '').trim();
-                                if (!text) return;
-                                void addNote(liveWeekRecord.id, 'bad', text);
-                                setNoteDrafts((previous) => ({ ...previous, [liveWeekRecord.id]: '' }));
-                              }}
-                            >
-                              Bad
-                            </Button>
-                          </Stack>
-                        )}
-                        <Stack spacing={0.75}>
-                          {!liveWeekRecord || liveWeekRecord.notes.length === 0 ? (
-                            <Chip size="small" variant="outlined" label="No notes yet" />
-                          ) : (
-                            liveWeekRecord.notes.map((note) => (
-                              <Chip
-                                key={note.id}
-                                size="small"
-                                label={`${note.type === 'good' ? 'Good' : 'Bad'} · ${note.text}`}
-                                color={note.type === 'good' ? 'success' : 'warning'}
-                                variant="outlined"
-                              />
-                            ))
-                          )}
-                        </Stack>
-                      </Box>
-                    </Stack>
-                  </CardContent>
-                </Card>
-              );
-            })
+                      </CardContent>
+                    </Card>
+                  );
+                })
+              )}
+            </>
           )}
         </Stack>
       )}
@@ -679,70 +973,69 @@ const Rewards: React.FC = () => {
       {surfaceMode === 'edit' && (
         <Stack spacing={2}>
           <Tabs
-            value={editSection === 'manage' ? 0 : 1}
-            onChange={(_event, value) => setEditSection(value === 0 ? 'manage' : 'template')}
-            sx={{ mb: 0.5 }}
+            value={editSection}
+            onChange={(_event, value) => setEditSection(value)}
+            variant="fullWidth"
+            sx={{ '& .MuiTab-root': { textTransform: 'none', fontWeight: 600 } }}
           >
-            <Tab label="Manage" />
-            <Tab label="Template" />
+            <Tab label="Manage" value="manage" />
+            <Tab label="Template" value="template" />
           </Tabs>
 
           {editSection === 'manage' && (
             <Stack spacing={2}>
-              <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, overflowX: 'auto', pb: 0.5 }}>
                 {orderedWeeks.map((group) => (
                   <Chip
                     key={group.weekOrder}
-                    label={
-                      group.weekOrder === template.currentWeekOrder
-                        ? `Current ${group.weekOrder + 1}W`
-                        : `${group.weekOrder + 1}W`
-                    }
+                    label={formatWeekChip(group, template.currentWeekOrder)}
                     color={group.weekOrder === selectedManageGroup?.weekOrder ? 'primary' : 'default'}
                     variant={group.weekOrder === selectedManageGroup?.weekOrder ? 'filled' : 'outlined'}
                     onClick={() => setManageWeek(group.weekOrder)}
+                    sx={{ flexShrink: 0 }}
                   />
                 ))}
-              </Stack>
+                <IconButton
+                  size="small"
+                  onClick={() => void instantiateNextWeek()}
+                  sx={{
+                    flexShrink: 0,
+                    border: '1px solid',
+                    borderColor: 'divider',
+                    backgroundColor: 'background.paper',
+                  }}
+                >
+                  <AddIcon fontSize="small" />
+                </IconButton>
+              </Box>
 
               {!selectedManageGroup ? (
                 <Alert severity="info">No instantiated weeks yet.</Alert>
               ) : (
-                selectedManageGroup.kids.map((record) => (
-                  <Card key={record.id} sx={{ borderRadius: 4 }}>
-                    <CardContent sx={{ p: 2 }}>
-                      <Stack spacing={2}>
-                        <Box>
-                          <Typography variant="h6">{record.kidName}</Typography>
-                          <Typography variant="body2" color="text.secondary">
-                            {record.levels[record.currentLevel]?.name || 'No level'} · Step {record.currentStep}/
-                            {record.levels[record.currentLevel]?.stepCount || 1}
-                          </Typography>
-                        </Box>
-                        {renderEditableLevels(
-                          record.levels,
-                          (levelId, updates) => {
-                            const levels = record.levels.map((level) =>
-                              level.id === levelId ? { ...level, ...updates } : level,
-                            );
-                            void updateWeekLevels(record.id, levels);
-                          },
-                          (levelId) => openRewardEditor({ mode: 'week-level', recordId: record.id, levelId }),
-                          (levelId, reward) =>
-                            openRewardEditor({ mode: 'week-level', recordId: record.id, levelId, reward }),
-                          (levelId, rewardId) => {
-                            const levels = record.levels.map((level) =>
-                              level.id === levelId
-                                ? { ...level, rewards: level.rewards.filter((reward) => reward.id !== rewardId) }
-                                : level,
-                            );
-                            void updateWeekLevels(record.id, levels);
-                          },
-                        )}
-                      </Stack>
-                    </CardContent>
-                  </Card>
-                ))
+                visibleManageKids.map((record) => {
+                  const accent = getKidAccent(record.kidId);
+                  return (
+                    <Card key={record.id} sx={{ borderRadius: 4, border: '1px solid', borderColor: accent.softBorder }}>
+                      <CardContent sx={{ p: 2 }}>
+                        <Stack spacing={2}>
+                          <Box>
+                            <Typography variant="h6" sx={{ color: accent.text }}>
+                              {record.kidName}
+                            </Typography>
+                            <Typography variant="body2" color="text.secondary">
+                              Level {record.currentLevel + 1} · Step {record.currentStep}/
+                              {record.levels[record.currentLevel]?.stepCount || 1}
+                            </Typography>
+                          </Box>
+                          {renderLevelSections(record.levels, {
+                            scope: 'week',
+                            recordId: record.id,
+                          })}
+                        </Stack>
+                      </CardContent>
+                    </Card>
+                  );
+                })
               )}
             </Stack>
           )}
@@ -751,8 +1044,8 @@ const Rewards: React.FC = () => {
             <Stack spacing={2}>
               <Card sx={{ borderRadius: 4 }}>
                 <CardContent sx={{ p: 2 }}>
-                  <Grid container spacing={2}>
-                    <Grid item xs={12} sm={6}>
+                  <Stack spacing={2}>
+                    <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
                       <FormControl fullWidth size="small">
                         <InputLabel id="boundary-label">Boundary day</InputLabel>
                         <Select
@@ -768,8 +1061,6 @@ const Rewards: React.FC = () => {
                           ))}
                         </Select>
                       </FormControl>
-                    </Grid>
-                    <Grid item xs={12} sm={6}>
                       <FormControl fullWidth size="small">
                         <InputLabel id="default-level-label">Default level</InputLabel>
                         <Select
@@ -778,123 +1069,131 @@ const Rewards: React.FC = () => {
                           value={template.defaultStartLevel}
                           onChange={(event) => void saveTemplate({ defaultStartLevel: Number(event.target.value) })}
                         >
-                          {template.levels.map((level, index) => (
-                            <MenuItem key={level.id} value={index}>
-                              {level.name}
+                          {template.levels.map((_, index) => (
+                            <MenuItem key={index} value={index}>
+                              Level {index + 1}
                             </MenuItem>
                           ))}
                         </Select>
                       </FormControl>
-                    </Grid>
-                  </Grid>
-                </CardContent>
-              </Card>
+                    </Stack>
 
-              <Card sx={{ borderRadius: 4 }}>
-                <CardContent sx={{ p: 2 }}>
-                  <Typography variant="subtitle1" gutterBottom>
-                    Kids
-                  </Typography>
-                  <Stack direction="row" spacing={1} sx={{ mb: 1.5 }}>
-                    <TextField
-                      size="small"
-                      fullWidth
-                      label="Kid name"
-                      value={kidName}
-                      onChange={(event) => setKidName(event.target.value)}
-                    />
-                    <Button
-                      variant="contained"
-                      onClick={() => {
-                        if (!kidName.trim()) return;
-                        void saveTemplate({
-                          kids: [...template.kids, { id: crypto.randomUUID(), name: kidName.trim() }],
-                        });
-                        setKidName('');
-                      }}
-                    >
-                      Add
-                    </Button>
-                  </Stack>
-                  <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
-                    {template.kids.length === 0 ? (
-                      <Chip size="small" variant="outlined" label="No kids yet" />
-                    ) : (
-                      template.kids.map((kid) => (
-                        <Chip
-                          key={kid.id}
+                    <Box>
+                      <Typography variant="subtitle1" gutterBottom>
+                        Kids
+                      </Typography>
+                      <Stack direction="row" spacing={1} sx={{ mb: 1.5 }}>
+                        <TextField
                           size="small"
-                          label={kid.name}
-                          onDelete={() =>
-                            void saveTemplate({ kids: template.kids.filter((item) => item.id !== kid.id) })
-                          }
+                          fullWidth
+                          label="Kid name"
+                          value={kidName}
+                          onChange={(event) => setKidName(event.target.value)}
                         />
-                      ))
-                    )}
+                        <Button
+                          variant="contained"
+                          onClick={() => {
+                            if (!kidName.trim()) return;
+                            void saveTemplate({
+                              kids: [...template.kids, { id: crypto.randomUUID(), name: kidName.trim() }],
+                            });
+                            setKidName('');
+                          }}
+                        >
+                          Add
+                        </Button>
+                      </Stack>
+                      <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
+                        {template.kids.length === 0 ? (
+                          <Chip size="small" variant="outlined" label="No kids yet" />
+                        ) : (
+                          template.kids.map((kid) => (
+                            <Chip
+                              key={kid.id}
+                              size="small"
+                              label={kid.name}
+                              sx={{
+                                backgroundColor: getKidAccent(kid.id).soft,
+                                color: getKidAccent(kid.id).text,
+                              }}
+                              onDelete={() =>
+                                void saveTemplate({ kids: template.kids.filter((item) => item.id !== kid.id) })
+                              }
+                            />
+                          ))
+                        )}
+                      </Stack>
+                    </Box>
                   </Stack>
                 </CardContent>
               </Card>
-
+              
               <Card sx={{ borderRadius: 4 }}>
                 <CardContent sx={{ p: 2 }}>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1.5 }}>
-                    <Typography variant="subtitle1">Levels</Typography>
-                    <Button
-                      size="small"
-                      onClick={() =>
-                        void saveTemplate({
-                          levels: [
-                            ...template.levels,
-                            {
-                              id: crypto.randomUUID(),
-                              name: `Level ${template.levels.length + 1}`,
-                              stepCount: 5,
-                              rewards: [],
-                            },
-                          ],
-                        })
-                      }
-                    >
-                      Add level
-                    </Button>
-                  </Box>
-                  {renderEditableLevels(
-                    template.levels,
-                    (levelId, updates) => {
-                      const levels = template.levels.map((level) =>
-                        level.id === levelId ? { ...level, ...updates } : level,
-                      );
-                      void saveTemplate({ levels });
-                    },
-                    (levelId) => openRewardEditor({ mode: 'template-level', levelId }),
-                    (levelId, reward) => openRewardEditor({ mode: 'template-level', levelId, reward }),
-                    (levelId, rewardId) => {
-                      const levels = template.levels.map((level) =>
-                        level.id === levelId
-                          ? { ...level, rewards: level.rewards.filter((reward) => reward.id !== rewardId) }
-                          : level,
-                      );
-                      void saveTemplate({ levels });
-                    },
-                  )}
-                  <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mt: 1.5 }}>
-                    {template.levels.map((level, index) => (
+                  <Stack spacing={2}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1 }}>
+                      <Typography variant="subtitle1">Levels</Typography>
                       <Button
-                        key={level.id}
                         size="small"
-                        color="error"
-                        onClick={() => {
-                          const nextLevels = template.levels.filter((item) => item.id !== level.id);
+                        onClick={() =>
                           void saveTemplate({
-                            levels: nextLevels,
-                            defaultStartLevel: Math.min(template.defaultStartLevel, Math.max(nextLevels.length - 1, 0)),
-                          });
-                        }}
-                        disabled={template.levels.length <= 1}
+                            levels: [
+                              ...template.levels,
+                              {
+                                id: crypto.randomUUID(),
+                                name: `Level ${template.levels.length + 1}`,
+                                stepCount: 5,
+                                rewards: [],
+                              },
+                            ],
+                          })
+                        }
                       >
-                        Remove {level.name || `Level ${index + 1}`}
+                        Add level
                       </Button>
-                    ))}
+                    </Box>
+
+                    <Box>
+                      <Typography variant="caption" color="text.secondary">
+                        Standby reminders
+                      </Typography>
+                      <Stack direction="row" spacing={0.75} useFlexGap flexWrap="wrap" sx={{ mt: 0.75 }}>
+                        {template.standbyRewards.length === 0 ? (
+                          <Chip size="small" variant="outlined" label="No standby rewards yet" />
+                        ) : (
+                          template.standbyRewards.map((reward) => (
+                            <Chip
+                              key={reward.id}
+                              size="small"
+                              icon={<AutoAwesomeIcon sx={{ fontSize: 14 }} />}
+                              label={formatReward(reward)}
+                            />
+                          ))
+                        )}
+                      </Stack>
+                    </Box>
+
+                    {renderLevelSections(template.levels, { scope: 'template' })}
+
+                    <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
+                      {template.levels.map((_, index) => (
+                        <Button
+                          key={index}
+                          size="small"
+                          color="error"
+                          disabled={template.levels.length <= 1}
+                          onClick={() => {
+                            const nextLevels = template.levels.filter((_, levelIndex) => levelIndex !== index);
+                            void saveTemplate({
+                              levels: nextLevels,
+                              defaultStartLevel: Math.min(template.defaultStartLevel, Math.max(nextLevels.length - 1, 0)),
+                            });
+                          }}
+                        >
+                          Remove Level {index + 1}
+                        </Button>
+                      ))}
+                    </Stack>
                   </Stack>
                 </CardContent>
               </Card>
@@ -903,50 +1202,23 @@ const Rewards: React.FC = () => {
                 <CardContent sx={{ p: 2 }}>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
                     <Typography variant="subtitle1">Standby Rewards</Typography>
-                    <Button size="small" onClick={() => openRewardEditor({ mode: 'template-standby' })}>
-                      Add
+                    <Button size="small" onClick={() => void addPlaceholderReward({ kind: 'template-standby' })}>
+                      Add reward
                     </Button>
                   </Box>
-                  <Stack spacing={1}>
-                    {template.standbyRewards.length === 0 ? (
-                      <Chip size="small" variant="outlined" label="No standby rewards yet" />
-                    ) : (
-                      template.standbyRewards.map((reward) => (
-                        <Card key={reward.id} variant="outlined">
-                          <CardContent sx={{ py: 1, '&:last-child': { pb: 1 } }}>
-                            <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
-                              <Box>
-                                <Typography variant="body2">{formatReward(reward)}</Typography>
-                                {reward.description && (
-                                  <Typography variant="caption" color="text.secondary">
-                                    {reward.description}
-                                  </Typography>
-                                )}
-                              </Box>
-                              <Stack direction="row" spacing={0.25}>
-                                <IconButton
-                                  size="small"
-                                  onClick={() => openRewardEditor({ mode: 'template-standby', reward })}
-                                >
-                                  <EditIcon fontSize="small" />
-                                </IconButton>
-                                <IconButton
-                                  size="small"
-                                  onClick={() =>
-                                    void saveTemplate({
-                                      standbyRewards: template.standbyRewards.filter((item) => item.id !== reward.id),
-                                    })
-                                  }
-                                >
-                                  <DeleteIcon fontSize="small" />
-                                </IconButton>
-                              </Stack>
-                            </Box>
-                          </CardContent>
-                        </Card>
-                      ))
-                    )}
-                  </Stack>
+                  {template.standbyRewards.length === 0 ? (
+                    <Chip size="small" variant="outlined" label="No standby rewards yet" />
+                  ) : (
+                    <Stack divider={<Divider flexItem />}>
+                      {template.standbyRewards.map((reward) =>
+                        renderRewardRow(
+                          reward,
+                          () => openRewardEditor({ mode: 'template-standby', reward }),
+                          () => void removeTemplateStandbyReward(reward.id),
+                        ),
+                      )}
+                    </Stack>
+                  )}
                 </CardContent>
               </Card>
             </Stack>
@@ -955,131 +1227,104 @@ const Rewards: React.FC = () => {
       )}
 
       {surfaceMode === 'execute' && (
-        <>
-          <Fab
-            color="secondary"
-            aria-label="rewards"
-            onClick={() => setSurfaceMode('rewards')}
-            sx={{
-              position: 'fixed',
-              right: 16,
-              bottom: 72,
-              boxShadow: '0 12px 20px rgba(156, 39, 176, 0.24)',
-            }}
-          >
-            <RewardsIcon />
-          </Fab>
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            sx={{ position: 'fixed', right: 20, bottom: 52, fontWeight: 600 }}
-          >
-            Rewards
-          </Typography>
-        </>
-      )}
-
-      {surfaceMode === 'rewards' && (
-        <Fab
-          color="default"
-          aria-label="back"
-          onClick={() => setSurfaceMode('execute')}
-          sx={{ position: 'fixed', right: 16, bottom: 72 }}
-        >
-          <ArrowBackIcon />
-        </Fab>
-      )}
-
-      {isMobile && surfaceMode === 'edit' && editSection === 'template' && (
         <Fab
           color="primary"
-          aria-label="add standby reward"
-          onClick={() => openRewardEditor({ mode: 'template-standby' })}
+          aria-label="rewards-actions"
+          onClick={() => setActionsOpen(true)}
           sx={{ position: 'fixed', right: 16, bottom: 72 }}
         >
-          <AddIcon />
+          <ActionsIcon />
         </Fab>
       )}
 
-      <Dialog open={settingsOpen} onClose={() => setSettingsOpen(false)} fullWidth maxWidth="sm">
-        <DialogTitle>Rewards Settings</DialogTitle>
+      {surfaceMode === 'edit' && (
+        <Fab
+          color="warning"
+          aria-label="reset-rewards"
+          onClick={() => setResetOpen(true)}
+          sx={{ position: 'fixed', right: 16, bottom: 72 }}
+        >
+          <ResetIcon />
+        </Fab>
+      )}
+
+      <Dialog open={actionsOpen} onClose={() => setActionsOpen(false)} fullWidth maxWidth="xs">
+        <DialogTitle>Week Actions</DialogTitle>
         <DialogContent>
-          <Stack spacing={2} sx={{ mt: 1 }}>
-            <Box>
-              <Typography variant="subtitle2" gutterBottom>
-                Views
-              </Typography>
-              <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
-                <Button
-                  variant="outlined"
-                  onClick={() => {
-                    setSurfaceMode('rewards');
-                    setSettingsOpen(false);
-                  }}
-                >
-                  Open Rewards
-                </Button>
-                <Button
-                  variant="contained"
-                  onClick={() => {
-                    setSurfaceMode('edit');
-                    setEditSection('manage');
-                    setSettingsOpen(false);
-                  }}
-                >
-                  Edit Weeks
-                </Button>
-                <Button
-                  variant="outlined"
-                  onClick={() => {
-                    setSurfaceMode('edit');
-                    setEditSection('template');
-                    setSettingsOpen(false);
-                  }}
-                >
-                  Edit Template
-                </Button>
-              </Stack>
-            </Box>
-
-            <Divider />
-
-            <Box>
-              <Typography variant="subtitle2" gutterBottom>
-                Week Actions
-              </Typography>
-              <Stack spacing={1}>
-                <Button variant="outlined" onClick={() => void instantiateNextWeek()}>
-                  Instantiate Next Week
-                </Button>
-                <Button variant="outlined" onClick={() => void freezeCurrentWeek(true)} disabled={!currentWeek}>
-                  Freeze Current Week And Carry Forward Unused Rewards
-                </Button>
-                <Button
-                  variant="outlined"
-                  onClick={() => void openCurrentNextWeek(false)}
-                  disabled={orderedWeeks.every((group) => group.weekOrder <= template.currentWeekOrder)}
-                >
-                  Open Next Week From Default Level
-                </Button>
-                <Button
-                  variant="outlined"
-                  onClick={() => void openCurrentNextWeek(true)}
-                  disabled={orderedWeeks.every((group) => group.weekOrder <= template.currentWeekOrder)}
-                >
-                  Open Next Week And Carry Level Forward
-                </Button>
-              </Stack>
-            </Box>
+          <Stack spacing={1.25} sx={{ mt: 1 }}>
+            <Button
+              variant="outlined"
+              onClick={() => {
+                void freezeCurrentWeek(false);
+                setActionsOpen(false);
+              }}
+              disabled={visibleCurrentKids.length === 0}
+            >
+              Freeze Current Week
+            </Button>
+            <Button
+              variant="outlined"
+              onClick={() => {
+                void freezeCurrentWeek(true);
+                setActionsOpen(false);
+              }}
+              disabled={visibleCurrentKids.length === 0}
+            >
+              Freeze And Carry Forward Unused Rewards
+            </Button>
+            <Button
+              variant="outlined"
+              onClick={() => {
+                void openCurrentNextWeek(false);
+                setActionsOpen(false);
+              }}
+              disabled={!canOpenNextWeek}
+            >
+              Move To Next Week
+            </Button>
+            <Button
+              variant="outlined"
+              onClick={() => {
+                void openCurrentNextWeek(true);
+                setActionsOpen(false);
+              }}
+              disabled={!canOpenNextWeek}
+            >
+              Move To Next Week And Carry Level
+            </Button>
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setSettingsOpen(false)}>Close</Button>
+          <Button onClick={() => setActionsOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={resetOpen} onClose={() => setResetOpen(false)} fullWidth maxWidth="xs">
+        <DialogTitle>Reset Reward Progress</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary">
+            This deletes all instantiated reward weeks and starts again from the first week. Template settings stay in place.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setResetOpen(false)}>Cancel</Button>
+          <Button
+            color="warning"
+            variant="contained"
+            onClick={() => {
+              void resetProgress();
+              setResetOpen(false);
+              setSurfaceMode('execute');
+              setExecuteTab('levels');
+            }}
+          >
+            Reset
+          </Button>
         </DialogActions>
       </Dialog>
 
       <Dialog open={Boolean(rewardDialog)} onClose={() => setRewardDialog(null)} fullWidth maxWidth="sm">
-        <DialogTitle>{rewardDialog?.reward ? 'Edit Reward' : 'Add Reward'}</DialogTitle>
+        <DialogTitle>Edit Reward</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 1 }}>
             <TextField
@@ -1094,56 +1339,65 @@ const Rewards: React.FC = () => {
               value={rewardDraft.description}
               onChange={(event) => setRewardDraft((previous) => ({ ...previous, description: event.target.value }))}
             />
-            <Grid container spacing={2}>
-              <Grid item xs={4}>
-                <TextField
-                  label="Qty"
-                  size="small"
-                  type="number"
-                  value={rewardDraft.quantity}
-                  onChange={(event) => setRewardDraft((previous) => ({ ...previous, quantity: event.target.value }))}
-                />
-              </Grid>
-              <Grid item xs={4}>
-                <TextField
-                  label="Amount"
-                  size="small"
-                  type="number"
-                  value={rewardDraft.amount}
-                  onChange={(event) => setRewardDraft((previous) => ({ ...previous, amount: event.target.value }))}
-                />
-              </Grid>
-              <Grid item xs={4}>
-                <TextField
-                  label="Unit"
-                  size="small"
-                  value={rewardDraft.amountUnit}
-                  onChange={(event) => setRewardDraft((previous) => ({ ...previous, amountUnit: event.target.value }))}
-                />
-              </Grid>
-            </Grid>
-            {template.standbyRewards.length > 0 && rewardDialog?.mode !== 'template-standby' && (
-              <Box>
-                <Typography variant="caption" color="text.secondary">
-                  Standby reminders
-                </Typography>
-                <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mt: 1 }}>
-                  {template.standbyRewards.map((reward) => (
-                    <Chip
-                      key={reward.id}
-                      size="small"
-                      label={formatReward(reward)}
-                      onClick={() => setRewardDraft(buildDraft(reward))}
-                    />
-                  ))}
-                </Stack>
-              </Box>
-            )}
+            <Stack direction="row" spacing={2}>
+              <TextField
+                fullWidth
+                label="Qty"
+                size="small"
+                type="number"
+                value={rewardDraft.quantity}
+                onChange={(event) => setRewardDraft((previous) => ({ ...previous, quantity: event.target.value }))}
+              />
+              <TextField
+                fullWidth
+                label="Amount"
+                size="small"
+                type="number"
+                value={rewardDraft.amount}
+                onChange={(event) => setRewardDraft((previous) => ({ ...previous, amount: event.target.value }))}
+              />
+              <TextField
+                fullWidth
+                label="Unit"
+                size="small"
+                value={rewardDraft.amountUnit}
+                onChange={(event) => setRewardDraft((previous) => ({ ...previous, amountUnit: event.target.value }))}
+              />
+            </Stack>
           </Stack>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setRewardDialog(null)}>Cancel</Button>
-          <Button variant="contained" onClick={() => void saveRewardEditor()}>
+          <Button
+            variant="contained"
+            onClick={() => {
+              void saveRewardEditor();
+            }}
+          >
+            Save
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(stepDialog)} onClose={() => setStepDialog(null)} fullWidth maxWidth="xs">
+        <DialogTitle>{stepDialog?.levelLabel} Steps</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            fullWidth
+            size="small"
+            type="number"
+            label="Steps"
+            sx={{ mt: 1 }}
+            value={stepDialog?.value || ''}
+            onChange={(event) =>
+              setStepDialog((previous) => (previous ? { ...previous, value: event.target.value } : previous))
+            }
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setStepDialog(null)}>Cancel</Button>
+          <Button variant="contained" onClick={() => void saveStepCount()}>
             Save
           </Button>
         </DialogActions>

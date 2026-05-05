@@ -1,4 +1,5 @@
 import {
+  adjustRewardQuantity,
   addManualRewardToWeek,
   addRewardWeekNote,
   consumeSingleRewardUnit,
@@ -9,6 +10,7 @@ import {
   getRewardsTemplate,
   instantiateNextRewardWeek,
   openNextRewardWeek,
+  resetRewardProgress,
   setKidStepDelta,
   updateRewardsTemplate,
 } from '../rewardServices';
@@ -183,5 +185,39 @@ describe('rewardServices', () => {
     const consumed = await consumeSingleRewardUnit(frozenRecord.id, stickerReward.id);
     const consumedReward = consumed.earnedRewards.find((reward) => reward.id === stickerReward.id)!;
     expect(consumedReward.remainingQuantity).toBe(stickerReward.remainingQuantity - 1);
+
+    const restored = await adjustRewardQuantity(frozenRecord.id, stickerReward.id, 1, {
+      remainingQuantity: consumedReward.remainingQuantity,
+    });
+    const restoredReward = restored.earnedRewards.find((reward) => reward.id === stickerReward.id)!;
+    expect(restoredReward.remainingQuantity).toBe(stickerReward.remainingQuantity);
+  });
+
+  it('rejects optimistic step updates when the source state changed', async () => {
+    const template = await buildTemplate();
+    const [record] = await instantiateNextRewardWeek(template);
+
+    await setKidStepDelta(record.id, 1);
+
+    await expect(
+      setKidStepDelta(record.id, 1, {
+        currentLevel: record.currentLevel,
+        currentStep: record.currentStep,
+        updatedAt: record.updatedAt,
+      }),
+    ).rejects.toThrow('Reward week record changed before update completed');
+  });
+
+  it('can reset reward progress without deleting the template', async () => {
+    const template = await buildTemplate();
+    await instantiateNextRewardWeek(template);
+
+    await resetRewardProgress(template.partnershipId, template.id);
+
+    const records = await getRewardWeekRecords(template.partnershipId);
+    const storedTemplate = await getRewardsTemplate(template.partnershipId);
+
+    expect(records).toHaveLength(0);
+    expect(storedTemplate?.currentWeekOrder).toBe(0);
   });
 });

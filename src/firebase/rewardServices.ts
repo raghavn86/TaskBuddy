@@ -14,11 +14,33 @@ const rewardWeekKidsCollection = firestoreService.collection('rewardWeekKids');
 
 const createId = () => crypto.randomUUID();
 
+type StepExpectation = Pick<RewardWeekKidRecord, 'currentLevel' | 'currentStep'> & {
+  updatedAt?: number;
+};
+
+type RewardQuantityExpectation = {
+  remainingQuantity: number;
+};
+
 const deepCloneLevels = (levels: RewardLevel[]): RewardLevel[] =>
   levels.map((level) => ({
     ...level,
     rewards: level.rewards.map((reward) => ({ ...reward })),
   }));
+
+const dedupeWeekRecords = (records: RewardWeekKidRecord[]): RewardWeekKidRecord[] => {
+  const latestByKidWeek = new Map<string, RewardWeekKidRecord>();
+
+  records.forEach((record) => {
+    const key = `${record.weekOrder}:${record.kidId}`;
+    const existing = latestByKidWeek.get(key);
+    if (!existing || existing.updatedAt < record.updatedAt) {
+      latestByKidWeek.set(key, record);
+    }
+  });
+
+  return Array.from(latestByKidWeek.values());
+};
 
 const mergeRewardInstances = (rewards: RewardInstance[]): RewardInstance[] => {
   const merged = new Map<string, RewardInstance>();
@@ -135,8 +157,9 @@ export const getRewardWeekRecords = async (partnershipId: string): Promise<Rewar
     ),
   );
 
-  return querySnapshot.docs
-    .map((doc: any) => doc.data() as RewardWeekKidRecord)
+  return dedupeWeekRecords(
+    querySnapshot.docs.map((doc: any) => doc.data() as RewardWeekKidRecord),
+  )
     .sort((a, b) => a.weekOrder - b.weekOrder || a.kidName.localeCompare(b.kidName));
 };
 
@@ -205,6 +228,7 @@ export const updateRewardWeekKid = async (
 export const setKidStepDelta = async (
   recordId: string,
   delta: 1 | -1,
+  expectation?: StepExpectation,
 ): Promise<RewardWeekKidRecord> => {
   const recordRef = firestoreService.doc(rewardWeekKidsCollection, recordId);
 
@@ -215,6 +239,14 @@ export const setKidStepDelta = async (
     }
 
     const record = snap.data() as RewardWeekKidRecord;
+    if (
+      expectation &&
+      (record.currentLevel !== expectation.currentLevel ||
+        record.currentStep !== expectation.currentStep ||
+        (expectation.updatedAt !== undefined && record.updatedAt !== expectation.updatedAt))
+    ) {
+      throw new Error('Reward week record changed before update completed');
+    }
     let currentLevel = record.currentLevel;
     let currentStep = record.currentStep;
 
@@ -239,6 +271,58 @@ export const setKidStepDelta = async (
       ...record,
       currentLevel,
       currentStep,
+      updatedAt: Date.now(),
+    };
+
+    transaction.update(recordRef, updatedRecord);
+    return updatedRecord;
+  }) as Promise<RewardWeekKidRecord>;
+};
+
+export const adjustRewardQuantity = async (
+  recordId: string,
+  rewardId: string,
+  delta: 1 | -1,
+  expectation?: RewardQuantityExpectation,
+): Promise<RewardWeekKidRecord> => {
+  const recordRef = firestoreService.doc(rewardWeekKidsCollection, recordId);
+
+  return firestoreService.runTransaction(async (transaction: any) => {
+    const snap = await transaction.get(recordRef);
+    if (!snap.exists()) {
+      throw new Error('Reward week record not found');
+    }
+
+    const record = snap.data() as RewardWeekKidRecord;
+    let rewardFound = false;
+
+    const earnedRewards = record.earnedRewards.map((reward) => {
+      if (reward.id !== rewardId) {
+        return reward;
+      }
+
+      rewardFound = true;
+      if (reward.amount !== undefined) {
+        throw new Error('Amount rewards must be edited directly');
+      }
+
+      if (expectation && reward.remainingQuantity !== expectation.remainingQuantity) {
+        throw new Error('Reward availability changed before update completed');
+      }
+
+      return {
+        ...reward,
+        remainingQuantity: Math.max(0, Math.min(reward.quantity, reward.remainingQuantity + delta)),
+      };
+    });
+
+    if (!rewardFound) {
+      throw new Error('Reward not found');
+    }
+
+    const updatedRecord = {
+      ...record,
+      earnedRewards,
       updatedAt: Date.now(),
     };
 
@@ -332,35 +416,7 @@ export const consumeSingleRewardUnit = async (
   recordId: string,
   rewardId: string,
 ): Promise<RewardWeekKidRecord> => {
-  const snap = await firestoreService.getDoc(firestoreService.doc(rewardWeekKidsCollection, recordId));
-  if (!snap.exists()) {
-    throw new Error('Reward week record not found');
-  }
-
-  const record = snap.data() as RewardWeekKidRecord;
-  const earnedRewards = record.earnedRewards.map((reward) => {
-    if (reward.id !== rewardId) {
-      return reward;
-    }
-
-    if (reward.amount !== undefined) {
-      return reward;
-    }
-
-    return {
-      ...reward,
-      remainingQuantity: Math.max(0, reward.remainingQuantity - 1),
-    };
-  });
-
-  const updatedRecord = {
-    ...record,
-    earnedRewards,
-    updatedAt: Date.now(),
-  };
-
-  await firestoreService.setDoc(firestoreService.doc(rewardWeekKidsCollection, recordId), updatedRecord);
-  return updatedRecord;
+  return adjustRewardQuantity(recordId, rewardId, -1);
 };
 
 const buildCumulativeRewards = (record: RewardWeekKidRecord): RewardInstance[] => {
@@ -468,4 +524,19 @@ export const openNextRewardWeek = async (
     template: updatedTemplate,
     openedRecords,
   };
+};
+
+export const resetRewardProgress = async (
+  partnershipId: string,
+  templateId: string,
+): Promise<void> => {
+  const records = await getRewardWeekRecords(partnershipId);
+
+  await Promise.all(
+    records.map((record) =>
+      firestoreService.deleteDoc(firestoreService.doc(rewardWeekKidsCollection, record.id)),
+    ),
+  );
+
+  await updateRewardsTemplate(templateId, { currentWeekOrder: 0 });
 };
