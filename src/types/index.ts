@@ -6,7 +6,7 @@ export type User = {
 };
 
 export * from './partnership';
-export * from './wellness';
+export * from './rewards';
 
 export type TaskCategory = {
   id: string;
