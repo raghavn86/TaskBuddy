@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Accordion,
   AccordionDetails,
@@ -118,6 +118,10 @@ const Rewards: React.FC = () => {
   const updateWeekLevels = async (recordId: string, levels: RewardLevel[]) => {
     await saveWeekRecord(recordId, { levels });
   };
+
+  useEffect(() => {
+    setManageWeek(template?.currentWeekOrder || 0);
+  }, [template?.currentWeekOrder]);
 
   const openRewardEditor = (state: NonNullable<typeof rewardDialog>) => {
     setRewardDialog(state);
@@ -577,6 +581,25 @@ const Rewards: React.FC = () => {
                   void saveTemplate({ levels });
                 },
               )}
+              <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mt: 1.5 }}>
+                {template.levels.map((level, index) => (
+                  <Button
+                    key={level.id}
+                    size="small"
+                    color="error"
+                    onClick={() => {
+                      const nextLevels = template.levels.filter((item) => item.id !== level.id);
+                      void saveTemplate({
+                        levels: nextLevels,
+                        defaultStartLevel: Math.min(template.defaultStartLevel, Math.max(nextLevels.length - 1, 0)),
+                      });
+                    }}
+                    disabled={template.levels.length <= 1}
+                  >
+                    Remove {level.name || `Level ${index + 1}`}
+                  </Button>
+                ))}
+              </Stack>
             </CardContent>
           </Card>
           <Card variant="outlined">
