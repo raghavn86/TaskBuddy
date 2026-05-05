@@ -1,10 +1,12 @@
 import { firestoreService } from './firestore';
 import {
   RewardDefinition,
+  RewardFreezePreviewKid,
   RewardInstance,
   RewardKid,
   RewardLevel,
   RewardTemplate,
+  RewardTitle,
   RewardWeekGroup,
   RewardWeekKidRecord,
 } from '../types';
@@ -27,6 +29,45 @@ const deepCloneLevels = (levels: RewardLevel[]): RewardLevel[] =>
     ...level,
     rewards: level.rewards.map((reward) => ({ ...reward })),
   }));
+
+const getKidTitleBoost = (
+  kidTitleIds: string[],
+  titles: RewardTitle[],
+) => kidTitleIds.reduce((total, titleId) => total + (titles.find((title) => title.id === titleId)?.stepBoost || 0), 0);
+
+const getStartingStep = (
+  levelIndex: number,
+  levels: RewardLevel[],
+  appliedTitleBoost: number,
+) => Math.min(levels[levelIndex]?.stepCount || 1, Math.max(1, 1 + appliedTitleBoost));
+
+const applyStepDelta = (
+  record: Pick<RewardWeekKidRecord, 'currentLevel' | 'currentStep' | 'levels'>,
+  delta: number,
+) => {
+  let currentLevel = record.currentLevel;
+  let currentStep = record.currentStep;
+  const direction = delta >= 0 ? 1 : -1;
+
+  for (let step = 0; step < Math.abs(delta); step += 1) {
+    if (direction > 0) {
+      const maxStep = record.levels[currentLevel]?.stepCount || 1;
+      if (currentStep < maxStep) {
+        currentStep += 1;
+      } else if (currentLevel < record.levels.length - 1) {
+        currentLevel += 1;
+        currentStep = 1;
+      }
+    } else if (currentStep > 1) {
+      currentStep -= 1;
+    } else if (currentLevel > 0) {
+      currentLevel -= 1;
+      currentStep = record.levels[currentLevel].stepCount;
+    }
+  }
+
+  return { currentLevel, currentStep };
+};
 
 const dedupeWeekRecords = (records: RewardWeekKidRecord[]): RewardWeekKidRecord[] => {
   const latestByKidWeek = new Map<string, RewardWeekKidRecord>();
@@ -103,6 +144,25 @@ const createDefaultLevel = (index: number): RewardLevel => ({
   rewards: [],
 });
 
+const normalizeTemplate = (template: RewardTemplate): RewardTemplate => ({
+  ...template,
+  kids: (template.kids || []).map((kid) => ({
+    ...kid,
+    titleIds: kid.titleIds || [],
+  })),
+  titles: template.titles || [],
+  standbyRewards: template.standbyRewards || [],
+});
+
+const normalizeWeekRecord = (record: RewardWeekKidRecord): RewardWeekKidRecord => ({
+  ...record,
+  titleIds: record.titleIds || [],
+  appliedTitleBoost: record.appliedTitleBoost || 0,
+  manualRewards: record.manualRewards || [],
+  earnedRewards: record.earnedRewards || [],
+  notes: record.notes || [],
+});
+
 export const createDefaultRewardsTemplate = async (
   partnershipId: string,
   userId: string,
@@ -119,6 +179,7 @@ export const createDefaultRewardsTemplate = async (
     defaultStartLevel: 0,
     currentWeekOrder: 0,
     kids: [],
+    titles: [],
     levels: [createDefaultLevel(0), createDefaultLevel(1), createDefaultLevel(2)],
     standbyRewards: [],
   };
@@ -136,7 +197,7 @@ export const getRewardsTemplate = async (partnershipId: string): Promise<RewardT
   );
 
   const doc = querySnapshot.docs[0];
-  return doc ? (doc.data() as RewardTemplate) : null;
+  return doc ? normalizeTemplate(doc.data() as RewardTemplate) : null;
 };
 
 export const updateRewardsTemplate = async (
@@ -158,7 +219,7 @@ export const getRewardWeekRecords = async (partnershipId: string): Promise<Rewar
   );
 
   return dedupeWeekRecords(
-    querySnapshot.docs.map((doc: any) => doc.data() as RewardWeekKidRecord),
+    querySnapshot.docs.map((doc: any) => normalizeWeekRecord(doc.data() as RewardWeekKidRecord)),
   )
     .sort((a, b) => a.weekOrder - b.weekOrder || a.kidName.localeCompare(b.kidName));
 };
@@ -185,6 +246,8 @@ export const instantiateNextRewardWeek = async (template: RewardTemplate): Promi
   const now = Date.now();
 
   const records = template.kids.map((kid: RewardKid) => {
+    const appliedTitleBoost = getKidTitleBoost(kid.titleIds, template.titles);
+    const currentLevel = Math.min(template.defaultStartLevel, Math.max(template.levels.length - 1, 0));
     const record: RewardWeekKidRecord = {
       id: createId(),
       partnershipId: template.partnershipId,
@@ -192,12 +255,14 @@ export const instantiateNextRewardWeek = async (template: RewardTemplate): Promi
       weekOrder: nextWeekOrder,
       kidId: kid.id,
       kidName: kid.name,
+      titleIds: [...kid.titleIds],
+      appliedTitleBoost,
       createdAt: now,
       updatedAt: now,
       openedAt: nextWeekOrder === template.currentWeekOrder ? now : undefined,
       levels: deepCloneLevels(template.levels),
-      currentLevel: Math.min(template.defaultStartLevel, Math.max(template.levels.length - 1, 0)),
-      currentStep: 1,
+      currentLevel,
+      currentStep: getStartingStep(currentLevel, template.levels, appliedTitleBoost),
       manualRewards: [],
       earnedRewards: [],
       notes: [],
@@ -230,6 +295,14 @@ export const setKidStepDelta = async (
   delta: 1 | -1,
   expectation?: StepExpectation,
 ): Promise<RewardWeekKidRecord> => {
+  return applyKidStepDelta(recordId, delta, expectation);
+};
+
+export const applyKidStepDelta = async (
+  recordId: string,
+  delta: number,
+  expectation?: StepExpectation,
+): Promise<RewardWeekKidRecord> => {
   const recordRef = firestoreService.doc(rewardWeekKidsCollection, recordId);
 
   return firestoreService.runTransaction(async (transaction: any) => {
@@ -247,25 +320,7 @@ export const setKidStepDelta = async (
     ) {
       throw new Error('Reward week record changed before update completed');
     }
-    let currentLevel = record.currentLevel;
-    let currentStep = record.currentStep;
-
-    if (delta > 0) {
-      const maxStep = record.levels[currentLevel]?.stepCount || 1;
-      if (currentStep < maxStep) {
-        currentStep += 1;
-      } else if (currentLevel < record.levels.length - 1) {
-        currentLevel += 1;
-        currentStep = 1;
-      }
-    } else {
-      if (currentStep > 1) {
-        currentStep -= 1;
-      } else if (currentLevel > 0) {
-        currentLevel -= 1;
-        currentStep = record.levels[currentLevel].stepCount;
-      }
-    }
+    const { currentLevel, currentStep } = applyStepDelta(record, delta);
 
     const updatedRecord = {
       ...record,
@@ -451,6 +506,12 @@ export const freezeRewardWeek = async (
 ): Promise<RewardWeekKidRecord[]> => {
   const allRecords = await getRewardWeekRecords(partnershipId);
   const currentWeekRecords = allRecords.filter((record) => record.weekOrder === weekOrder);
+  if (currentWeekRecords.length === 0) {
+    throw new Error('Current week is not instantiated');
+  }
+  if (currentWeekRecords.every((record) => Boolean(record.frozenAt))) {
+    throw new Error('Current week is already frozen');
+  }
   const previousWeekRecords = allRecords.filter((record) => record.weekOrder === weekOrder - 1);
 
   const updatedRecords = currentWeekRecords.map((record) => {
@@ -479,6 +540,29 @@ export const freezeRewardWeek = async (
   return updatedRecords;
 };
 
+export const canFreezeRewardWeek = (
+  records: RewardWeekKidRecord[],
+): boolean => records.length > 0 && records.some((record) => !record.frozenAt);
+
+export const previewFreezeRewardWeek = async (
+  partnershipId: string,
+  weekOrder: number,
+): Promise<RewardFreezePreviewKid[]> => {
+  const allRecords = await getRewardWeekRecords(partnershipId);
+  const currentWeekRecords = allRecords.filter((record) => record.weekOrder === weekOrder);
+  const previousWeekRecords = allRecords.filter((record) => record.weekOrder === weekOrder - 1);
+
+  return currentWeekRecords.map((record) => ({
+    recordId: record.id,
+    kidId: record.kidId,
+    kidName: record.kidName,
+    pendingRewards: buildCumulativeRewards(record),
+    carryForwardRewards: previousWeekRecords.find((item) => item.kidId === record.kidId)
+      ? getUnusedRewardsForCarryForward(previousWeekRecords.find((item) => item.kidId === record.kidId)!)
+      : [],
+  }));
+};
+
 export const openNextRewardWeek = async (
   template: RewardTemplate,
   carryForwardLevel: boolean,
@@ -496,11 +580,14 @@ export const openNextRewardWeek = async (
   const openedRecords = nextRecords.map((record) => {
     const currentRecord = currentRecords.find((item) => item.kidId === record.kidId);
     const carriedLevel = carryForwardLevel && currentRecord ? currentRecord.currentLevel : template.defaultStartLevel;
+    const appliedTitleBoost = getKidTitleBoost(record.titleIds, template.titles);
+    const nextLevel = Math.min(carriedLevel, Math.max(record.levels.length - 1, 0));
 
     return {
       ...record,
-      currentLevel: Math.min(carriedLevel, Math.max(record.levels.length - 1, 0)),
-      currentStep: 1,
+      currentLevel: nextLevel,
+      appliedTitleBoost,
+      currentStep: getStartingStep(nextLevel, record.levels, appliedTitleBoost),
       openedAt: now,
       updatedAt: now,
     };
@@ -539,4 +626,46 @@ export const resetRewardProgress = async (
   );
 
   await updateRewardsTemplate(templateId, { currentWeekOrder: 0 });
+};
+
+export const syncCurrentAndFutureRewardWeeksFromTemplate = async (
+  template: RewardTemplate,
+): Promise<RewardWeekKidRecord[]> => {
+  const records = await getRewardWeekRecords(template.partnershipId);
+  const recordsToSync = records.filter((record) => record.weekOrder >= template.currentWeekOrder);
+  const recordsToDelete = recordsToSync.filter(
+    (record) => !template.kids.some((kid) => kid.id === record.kidId),
+  );
+
+  const syncedRecords = recordsToSync.map((record) => {
+    const templateKid = template.kids.find((kid) => kid.id === record.kidId);
+    if (!templateKid) {
+      return record;
+    }
+
+    const appliedTitleBoost = getKidTitleBoost(templateKid.titleIds, template.titles);
+    const minCurrentStep = getStartingStep(record.currentLevel, record.levels, appliedTitleBoost);
+
+    return {
+      ...record,
+      kidName: templateKid.name,
+      titleIds: [...templateKid.titleIds],
+      appliedTitleBoost,
+      currentStep: Math.max(record.currentStep, minCurrentStep),
+      updatedAt: Date.now(),
+    };
+  });
+
+  await Promise.all(
+    syncedRecords.map((record) =>
+      firestoreService.setDoc(firestoreService.doc(rewardWeekKidsCollection, record.id), record),
+    ),
+  );
+  await Promise.all(
+    recordsToDelete.map((record) =>
+      firestoreService.deleteDoc(firestoreService.doc(rewardWeekKidsCollection, record.id)),
+    ),
+  );
+
+  return syncedRecords.filter((record) => !recordsToDelete.some((deleted) => deleted.id === record.id));
 };

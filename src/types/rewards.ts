@@ -19,6 +19,13 @@ export interface RewardLevel {
 export interface RewardKid {
   id: string;
   name: string;
+  titleIds: string[];
+}
+
+export interface RewardTitle {
+  id: string;
+  name: string;
+  stepBoost: number;
 }
 
 export interface RewardTemplate {
@@ -31,6 +38,7 @@ export interface RewardTemplate {
   defaultStartLevel: number;
   currentWeekOrder: number;
   kids: RewardKid[];
+  titles: RewardTitle[];
   levels: RewardLevel[];
   standbyRewards: RewardDefinition[];
 }
@@ -62,6 +70,8 @@ export interface RewardWeekKidRecord {
   weekOrder: number;
   kidId: string;
   kidName: string;
+  titleIds: string[];
+  appliedTitleBoost: number;
   createdAt: number;
   updatedAt: number;
   openedAt?: number;
@@ -77,4 +87,12 @@ export interface RewardWeekKidRecord {
 export interface RewardWeekGroup {
   weekOrder: number;
   kids: RewardWeekKidRecord[];
+}
+
+export interface RewardFreezePreviewKid {
+  recordId: string;
+  kidId: string;
+  kidName: string;
+  pendingRewards: RewardInstance[];
+  carryForwardRewards: RewardInstance[];
 }

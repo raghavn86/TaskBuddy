@@ -1,16 +1,21 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from './AuthContext';
 import { usePartnership } from './PartnershipContext';
 import {
   RewardDefinition,
+  RewardFreezePreviewKid,
   RewardTemplate,
   RewardWeekGroup,
+  RewardKid,
+  RewardTitle,
   RewardWeekKidRecord,
 } from '../types';
 import {
   adjustRewardQuantity,
   addManualRewardToWeek,
   addRewardWeekNote,
+  applyKidStepDelta,
+  canFreezeRewardWeek,
   consumeSingleRewardUnit,
   createDefaultRewardsTemplate,
   freezeRewardWeek,
@@ -18,27 +23,38 @@ import {
   getRewardsTemplate,
   instantiateNextRewardWeek,
   openNextRewardWeek,
+  previewFreezeRewardWeek,
   resetRewardProgress,
-  setKidStepDelta,
+  syncCurrentAndFutureRewardWeeksFromTemplate,
   updateRewardAvailability,
   updateRewardWeekKid,
   updateRewardsTemplate,
 } from '../firebase/rewardServices';
 
 type SyncState = 'idle' | 'pending' | 'synced' | 'error';
+type PendingStepSync = {
+  delta: number;
+  baseLevel: number;
+  baseStep: number;
+  baseUpdatedAt: number;
+};
 
 type RewardsContextType = {
   template: RewardTemplate | null;
   weekGroups: RewardWeekGroup[];
   currentWeek: RewardWeekGroup | null;
   rewardSourceWeek: RewardWeekGroup | null;
+  freezePreview: RewardFreezePreviewKid[];
+  canFreezeCurrentWeek: boolean;
   syncStatusByRecordId: Record<string, SyncState>;
   isLoading: boolean;
   error: string | null;
   loadRewardsData: () => Promise<void>;
   createTemplate: () => Promise<void>;
   saveTemplate: (updates: Partial<RewardTemplate>) => Promise<void>;
+  saveKidsAndTitles: (kids: RewardKid[], titles: RewardTitle[]) => Promise<void>;
   instantiateNextWeek: () => Promise<void>;
+  loadFreezePreview: () => Promise<void>;
   freezeCurrentWeek: (carryForwardUnusedRewards: boolean) => Promise<void>;
   openCurrentNextWeek: (carryForwardLevel: boolean) => Promise<void>;
   changeKidStep: (recordId: string, delta: 1 | -1) => Promise<void>;
@@ -71,18 +87,51 @@ export const RewardsProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const { activePartnership } = usePartnership();
   const [template, setTemplate] = useState<RewardTemplate | null>(null);
   const [weekGroups, setWeekGroups] = useState<RewardWeekGroup[]>([]);
+  const [freezePreview, setFreezePreview] = useState<RewardFreezePreviewKid[]>([]);
   const [syncStatusByRecordId, setSyncStatusByRecordId] = useState<Record<string, SyncState>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const pendingStepQueueRef = useRef<Map<string, PendingStepSync>>(new Map());
+  const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const syncInFlightRef = useRef(false);
+  const syncSkipCountRef = useRef(0);
 
   const markSyncState = useCallback((recordId: string, state: SyncState) => {
     setSyncStatusByRecordId((previous) => ({ ...previous, [recordId]: state }));
+  }, []);
+
+  const upsertRecords = useCallback((updatedRecords: RewardWeekKidRecord[]) => {
+    if (updatedRecords.length === 0) {
+      return;
+    }
+
+    setWeekGroups((previous) => {
+      const groups = new Map<number, RewardWeekKidRecord[]>();
+
+      previous.forEach((group) => {
+        groups.set(group.weekOrder, [...group.kids]);
+      });
+
+      updatedRecords.forEach((record) => {
+        const existingKids = groups.get(record.weekOrder) || [];
+        const filteredKids = existingKids.filter((kid) => kid.id !== record.id);
+        groups.set(
+          record.weekOrder,
+          [...filteredKids, record].sort((a, b) => a.kidName.localeCompare(b.kidName)),
+        );
+      });
+
+      return Array.from(groups.entries())
+        .sort((a, b) => a[0] - b[0])
+        .map(([weekOrder, kids]) => ({ weekOrder, kids }));
+    });
   }, []);
 
   const loadRewardsData = useCallback(async () => {
     if (!activePartnership) {
       setTemplate(null);
       setWeekGroups([]);
+      setFreezePreview([]);
       return;
     }
 
@@ -97,6 +146,7 @@ export const RewardsProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
       setTemplate(loadedTemplate);
       setWeekGroups(groups);
+      setFreezePreview([]);
       setSyncStatusByRecordId({});
     } catch (err) {
       console.error('Failed to load rewards data', err);
@@ -115,22 +165,18 @@ export const RewardsProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   }, [currentUser, activePartnership, loadRewardsData]);
 
+  useEffect(
+    () => () => {
+      if (syncIntervalRef.current) {
+        clearInterval(syncIntervalRef.current);
+      }
+    },
+    [],
+  );
+
   const replaceRecord = useCallback((updatedRecord: RewardWeekKidRecord) => {
-    setWeekGroups((previous) =>
-      previous
-        .map((group) =>
-          group.weekOrder === updatedRecord.weekOrder
-            ? {
-                ...group,
-                kids: group.kids
-                  .map((kid) => (kid.id === updatedRecord.id ? updatedRecord : kid))
-                  .sort((a, b) => a.kidName.localeCompare(b.kidName)),
-              }
-            : group,
-        )
-        .sort((a, b) => a.weekOrder - b.weekOrder),
-    );
-  }, []);
+    upsertRecords([updatedRecord]);
+  }, [upsertRecords]);
 
   const createTemplate = useCallback(async () => {
     if (!currentUser || !activePartnership) {
@@ -170,6 +216,27 @@ export const RewardsProvider: React.FC<{ children: React.ReactNode }> = ({ child
     [template],
   );
 
+  const saveKidsAndTitles = useCallback(
+    async (kids: RewardKid[], titles: RewardTitle[]) => {
+      if (!template) {
+        return;
+      }
+
+      const updatedTemplate = {
+        ...template,
+        kids,
+        titles,
+        updatedAt: Date.now(),
+      };
+
+      setTemplate(updatedTemplate);
+      await updateRewardsTemplate(template.id, { kids, titles });
+      await syncCurrentAndFutureRewardWeeksFromTemplate(updatedTemplate);
+      await loadRewardsData();
+    },
+    [loadRewardsData, template],
+  );
+
   const instantiateNextWeek = useCallback(async () => {
     if (!template) {
       return;
@@ -179,16 +246,28 @@ export const RewardsProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setError(null);
 
     try {
-      const createdRecords = await instantiateNextRewardWeek(template);
-      setWeekGroups((previous) =>
-        [...previous, { weekOrder: createdRecords[0]?.weekOrder ?? previous.length, kids: createdRecords }]
-          .sort((a, b) => a.weekOrder - b.weekOrder),
-      );
+        const createdRecords = await instantiateNextRewardWeek(template);
+      upsertRecords(createdRecords);
     } catch (err) {
       console.error('Failed to instantiate next week', err);
       setError('Failed to instantiate next week');
     } finally {
       setIsLoading(false);
+    }
+  }, [template]);
+
+  const loadFreezePreview = useCallback(async () => {
+    if (!template) {
+      setFreezePreview([]);
+      return;
+    }
+
+    try {
+      const preview = await previewFreezeRewardWeek(template.partnershipId, template.currentWeekOrder);
+      setFreezePreview(preview);
+    } catch (err) {
+      console.error('Failed to load freeze preview', err);
+      setError('Failed to load freeze preview');
     }
   }, [template]);
 
@@ -207,15 +286,16 @@ export const RewardsProvider: React.FC<{ children: React.ReactNode }> = ({ child
           template.currentWeekOrder,
           carryForwardUnusedRewards,
         );
-        updatedRecords.forEach(replaceRecord);
+        upsertRecords(updatedRecords);
+        setFreezePreview([]);
       } catch (err) {
         console.error('Failed to freeze current week', err);
-        setError('Failed to freeze current week');
+        setError(err instanceof Error ? err.message : 'Failed to freeze current week');
       } finally {
         setIsLoading(false);
       }
     },
-    [replaceRecord, template],
+    [template, upsertRecords],
   );
 
   const openCurrentNextWeek = useCallback(
@@ -230,7 +310,8 @@ export const RewardsProvider: React.FC<{ children: React.ReactNode }> = ({ child
       try {
         const result = await openNextRewardWeek(template, carryForwardLevel);
         setTemplate(result.template);
-        result.openedRecords.forEach(replaceRecord);
+        upsertRecords(result.openedRecords);
+        setFreezePreview([]);
       } catch (err) {
         console.error('Failed to open next week', err);
         setError(err instanceof Error ? err.message : 'Failed to open next week');
@@ -238,8 +319,89 @@ export const RewardsProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setIsLoading(false);
       }
     },
-    [replaceRecord, template],
+    [template, upsertRecords],
   );
+
+  const clearSyncIntervalIfIdle = useCallback(() => {
+    if (
+      syncIntervalRef.current &&
+      pendingStepQueueRef.current.size === 0 &&
+      !syncInFlightRef.current
+    ) {
+      clearInterval(syncIntervalRef.current);
+      syncIntervalRef.current = null;
+    }
+  }, []);
+
+  const flushStepQueue = useCallback(async () => {
+    if (syncInFlightRef.current) {
+      syncSkipCountRef.current += 1;
+      if (syncSkipCountRef.current >= 6) {
+        setError('Step sync is taking too long. Refresh and try again.');
+      }
+      return;
+    }
+
+    if (pendingStepQueueRef.current.size === 0) {
+      clearSyncIntervalIfIdle();
+      return;
+    }
+
+    const queuedUpdates = pendingStepQueueRef.current;
+    pendingStepQueueRef.current = new Map();
+    syncInFlightRef.current = true;
+
+    try {
+      const queueEntries = Array.from(queuedUpdates.entries());
+      const updatedRecords = await Promise.all(
+        queueEntries.map(([recordId, item]) =>
+          applyKidStepDelta(recordId, item.delta, {
+            currentLevel: item.baseLevel,
+            currentStep: item.baseStep,
+            updatedAt: item.baseUpdatedAt,
+          }),
+        ),
+      );
+
+      updatedRecords.forEach((record) => markSyncState(record.id, 'synced'));
+      upsertRecords(updatedRecords);
+      syncSkipCountRef.current = 0;
+    } catch (err) {
+      console.error('Failed to flush step queue', err);
+      const message = err instanceof Error ? err.message : 'Failed to sync steps';
+      const isStateConflict = message.includes('changed before update completed') || message.includes('not found');
+
+      if (!isStateConflict) {
+        queuedUpdates.forEach((value, key) => {
+          const existing = pendingStepQueueRef.current.get(key);
+          pendingStepQueueRef.current.set(key, existing
+            ? {
+                ...existing,
+                delta: existing.delta + value.delta,
+                baseLevel: value.baseLevel,
+                baseStep: value.baseStep,
+                baseUpdatedAt: value.baseUpdatedAt,
+              }
+            : value);
+        });
+      }
+
+      queuedUpdates.forEach((_value, key) => markSyncState(key, 'error'));
+      setError(message);
+      await loadRewardsData();
+    } finally {
+      syncInFlightRef.current = false;
+      clearSyncIntervalIfIdle();
+    }
+  }, [clearSyncIntervalIfIdle, loadRewardsData, markSyncState, upsertRecords]);
+
+  const ensureSyncInterval = useCallback(() => {
+    if (!syncIntervalRef.current) {
+      syncIntervalRef.current = setInterval(() => {
+        void flushStepQueue();
+      }, 1200);
+    }
+  }, [flushStepQueue]);
 
   const changeKidStep = useCallback(
     async (recordId: string, delta: 1 | -1) => {
@@ -248,43 +410,61 @@ export const RewardsProvider: React.FC<{ children: React.ReactNode }> = ({ child
         return;
       }
 
+      const queued = pendingStepQueueRef.current.get(recordId);
       const nextRecord = { ...existingRecord };
-      const maxStep = nextRecord.levels[nextRecord.currentLevel]?.stepCount || 1;
-
-      if (delta > 0) {
-        if (nextRecord.currentStep < maxStep) {
-          nextRecord.currentStep += 1;
-        } else if (nextRecord.currentLevel < nextRecord.levels.length - 1) {
-          nextRecord.currentLevel += 1;
-          nextRecord.currentStep = 1;
+      const maxDelta = (queued?.delta || 0) + delta;
+      const optimisticResult = (() => {
+        let currentLevel = nextRecord.currentLevel;
+        let currentStep = nextRecord.currentStep;
+        const direction = delta > 0 ? 1 : -1;
+        if (direction > 0) {
+          const maxStep = nextRecord.levels[currentLevel]?.stepCount || 1;
+          if (currentStep < maxStep) {
+            currentStep += 1;
+          } else if (currentLevel < nextRecord.levels.length - 1) {
+            currentLevel += 1;
+            currentStep = 1;
+          }
+        } else if (currentStep > 1) {
+          currentStep -= 1;
+        } else if (currentLevel > 0) {
+          currentLevel -= 1;
+          currentStep = nextRecord.levels[currentLevel].stepCount;
         }
-      } else if (nextRecord.currentStep > 1) {
-        nextRecord.currentStep -= 1;
-      } else if (nextRecord.currentLevel > 0) {
-        nextRecord.currentLevel -= 1;
-        nextRecord.currentStep = nextRecord.levels[nextRecord.currentLevel].stepCount;
-      }
 
+        return { currentLevel, currentStep };
+      })();
+
+      nextRecord.currentLevel = optimisticResult.currentLevel;
+      nextRecord.currentStep = optimisticResult.currentStep;
       nextRecord.updatedAt = Date.now();
       replaceRecord(nextRecord);
       markSyncState(recordId, 'pending');
+      setError(null);
+      syncSkipCountRef.current = 0;
 
-      try {
-        const updatedRecord = await setKidStepDelta(recordId, delta, {
-          currentLevel: existingRecord.currentLevel,
-          currentStep: existingRecord.currentStep,
-          updatedAt: existingRecord.updatedAt,
-        });
-        replaceRecord(updatedRecord);
+      if (maxDelta === 0) {
+        pendingStepQueueRef.current.delete(recordId);
         markSyncState(recordId, 'synced');
-      } catch (err) {
-        console.error('Failed to update step', err);
-        await loadRewardsData();
-        setError(err instanceof Error ? err.message : 'Failed to update step');
-        markSyncState(recordId, 'error');
+        clearSyncIntervalIfIdle();
+        return;
       }
+
+      pendingStepQueueRef.current.set(recordId, queued
+        ? {
+            ...queued,
+            delta: maxDelta,
+          }
+        : {
+            delta,
+            baseLevel: existingRecord.currentLevel,
+            baseStep: existingRecord.currentStep,
+            baseUpdatedAt: existingRecord.updatedAt,
+          });
+
+      ensureSyncInterval();
     },
-    [loadRewardsData, markSyncState, replaceRecord, weekGroups],
+    [clearSyncIntervalIfIdle, ensureSyncInterval, markSyncState, replaceRecord, weekGroups],
   );
 
   const addNote = useCallback(
@@ -419,18 +599,27 @@ export const RewardsProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return weekGroups.find((group) => group.weekOrder === template.currentWeekOrder - 1) || null;
   }, [template, weekGroups]);
 
+  const canFreezeCurrentWeek = useMemo(
+    () => canFreezeRewardWeek(currentWeek?.kids || []),
+    [currentWeek?.kids],
+  );
+
   const value: RewardsContextType = {
     template,
     weekGroups,
     currentWeek,
     rewardSourceWeek,
+    freezePreview,
+    canFreezeCurrentWeek,
     syncStatusByRecordId,
     isLoading,
     error,
     loadRewardsData,
     createTemplate,
     saveTemplate,
+    saveKidsAndTitles,
     instantiateNextWeek,
+    loadFreezePreview,
     freezeCurrentWeek,
     openCurrentNextWeek,
     changeKidStep,

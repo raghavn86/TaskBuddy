@@ -12,6 +12,7 @@ import {
   openNextRewardWeek,
   resetRewardProgress,
   setKidStepDelta,
+  syncCurrentAndFutureRewardWeeksFromTemplate,
   updateRewardsTemplate,
 } from '../rewardServices';
 import { firestoreService } from '../firestore';
@@ -32,9 +33,10 @@ describe('rewardServices', () => {
     const updatedTemplate: RewardTemplate = {
       ...template,
       kids: [
-        { id: 'kid-a', name: 'Ava' },
-        { id: 'kid-b', name: 'Ben' },
+        { id: 'kid-a', name: 'Ava', titleIds: [] },
+        { id: 'kid-b', name: 'Ben', titleIds: [] },
       ],
+      titles: [{ id: 'title-1', name: 'Drawing Expert', stepBoost: 2 }],
       levels: [
         {
           id: 'level-1',
@@ -67,6 +69,7 @@ describe('rewardServices', () => {
     expect(loadedTemplate!.id).toBe(template.id);
     expect(loadedTemplate!.weekBoundaryDay).toBe(5);
     expect(loadedTemplate!.levels).toHaveLength(3);
+    expect(loadedTemplate!.titles).toEqual([]);
   });
 
   it('instantiates weekly kid records grouped by week order', async () => {
@@ -80,6 +83,7 @@ describe('rewardServices', () => {
     expect(groups).toHaveLength(1);
     expect(groups[0].weekOrder).toBe(0);
     expect(groups[0].kids.map((kid) => kid.kidName)).toEqual(['Ava', 'Ben']);
+    expect(records.find((record) => record.kidId === 'kid-a')?.currentStep).toBe(1);
   });
 
   it('moves steps across level boundaries and clamps at limits', async () => {
@@ -219,5 +223,29 @@ describe('rewardServices', () => {
 
     expect(records).toHaveLength(0);
     expect(storedTemplate?.currentWeekOrder).toBe(0);
+  });
+
+  it('syncs current and future records when title assignments change', async () => {
+    const template = await buildTemplate();
+    await instantiateNextRewardWeek(template);
+    await instantiateNextRewardWeek(template);
+
+    const updatedTemplate: RewardTemplate = {
+      ...template,
+      titles: [...template.titles, { id: 'title-2', name: 'Helper', stepBoost: 1 }],
+      kids: template.kids.map((kid) =>
+        kid.id === 'kid-a' ? { ...kid, titleIds: ['title-1'] } : kid.id === 'kid-b' ? { ...kid, titleIds: ['title-2'] } : kid,
+      ),
+    };
+
+    const synced = await syncCurrentAndFutureRewardWeeksFromTemplate(updatedTemplate);
+    const benCurrent = synced.find((record) => record.kidId === 'kid-b' && record.weekOrder === 0)!;
+    const avaCurrent = synced.find((record) => record.kidId === 'kid-a' && record.weekOrder === 0)!;
+
+    expect(benCurrent.titleIds).toEqual(['title-2']);
+    expect(benCurrent.appliedTitleBoost).toBe(1);
+    expect(benCurrent.currentStep).toBe(2);
+    expect(avaCurrent.titleIds).toEqual(['title-1']);
+    expect(avaCurrent.currentStep).toBe(2);
   });
 });

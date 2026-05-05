@@ -5,6 +5,7 @@ import {
   Button,
   Card,
   CardContent,
+  Checkbox,
   Chip,
   Dialog,
   DialogActions,
@@ -13,6 +14,7 @@ import {
   Divider,
   Fab,
   FormControl,
+  FormControlLabel,
   IconButton,
   InputLabel,
   MenuItem,
@@ -38,11 +40,11 @@ import {
 } from '@mui/icons-material';
 import Loading from '../components/common/Loading';
 import { useRewards } from '../context/RewardsContext';
-import { RewardDefinition, RewardInstance, RewardLevel, RewardNote, RewardWeekGroup, RewardWeekKidRecord } from '../types';
+import { RewardDefinition, RewardInstance, RewardKid, RewardLevel, RewardNote, RewardTitle, RewardWeekGroup, RewardWeekKidRecord } from '../types';
 
 type ExecuteTab = 'levels' | 'current' | 'last';
 type SurfaceMode = 'execute' | 'edit';
-type EditSection = 'manage' | 'template';
+type EditSection = 'manage' | 'kids' | 'template';
 type RewardEditorMode = 'template-level' | 'template-standby' | 'week-level' | 'week-manual';
 
 type RewardEditorState = {
@@ -112,6 +114,12 @@ const buildPlaceholderReward = (label: string): RewardDefinition => ({
   id: crypto.randomUUID(),
   title: `${label} ${Math.floor(Math.random() * 900) + 100}`,
   quantity: 1,
+});
+
+const buildPlaceholderTitle = (): RewardTitle => ({
+  id: crypto.randomUUID(),
+  name: `Title ${Math.floor(Math.random() * 90) + 10}`,
+  stepBoost: 1,
 });
 
 const dedupeKidRecords = (records: RewardWeekKidRecord[]): RewardWeekKidRecord[] => {
@@ -216,12 +224,16 @@ const Rewards: React.FC = () => {
     weekGroups,
     currentWeek,
     rewardSourceWeek,
+    freezePreview,
+    canFreezeCurrentWeek,
     syncStatusByRecordId,
     isLoading,
     error,
     createTemplate,
     saveTemplate,
+    saveKidsAndTitles,
     instantiateNextWeek,
+    loadFreezePreview,
     freezeCurrentWeek,
     openCurrentNextWeek,
     changeKidStep,
@@ -248,6 +260,8 @@ const Rewards: React.FC = () => {
   const [availabilityDraft, setAvailabilityDraft] = useState({ quantity: '0', amount: '' });
   const [stepDialog, setStepDialog] = useState<StepDialogState>(null);
   const [actionsOpen, setActionsOpen] = useState(false);
+  const [freezeDialogOpen, setFreezeDialogOpen] = useState(false);
+  const [freezeCarryForward, setFreezeCarryForward] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
 
   const orderedWeeks = useMemo(() => [...weekGroups].sort((a, b) => a.weekOrder - b.weekOrder), [weekGroups]);
@@ -269,6 +283,10 @@ const Rewards: React.FC = () => {
       visibleCurrentKids.length > 0 &&
       visibleCurrentKids.every((record) => Boolean(record.frozenAt)) &&
       orderedWeeks.some((group) => group.weekOrder === template.currentWeekOrder + 1),
+  );
+  const titleNameMap = useMemo(
+    () => new Map((template?.titles || []).map((title) => [title.id, title.name])),
+    [template?.titles],
   );
 
   const toReward = (): RewardDefinition => ({
@@ -435,11 +453,71 @@ const Rewards: React.FC = () => {
     setStepDialog(null);
   };
 
+  const updateKid = async (kidId: string, updates: Partial<RewardKid>) => {
+    if (!template) return;
+    const kids = template.kids.map((kid) => (kid.id === kidId ? { ...kid, ...updates } : kid));
+    await saveKidsAndTitles(kids, template.titles);
+  };
+
+  const addKid = async () => {
+    if (!template || !kidName.trim()) return;
+    await saveKidsAndTitles(
+      [...template.kids, { id: crypto.randomUUID(), name: kidName.trim(), titleIds: [] }],
+      template.titles,
+    );
+    setKidName('');
+  };
+
+  const removeKid = async (kidId: string) => {
+    if (!template) return;
+    await saveKidsAndTitles(
+      template.kids.filter((kid) => kid.id !== kidId),
+      template.titles,
+    );
+  };
+
+  const updateTitle = async (titleId: string, updates: Partial<RewardTitle>) => {
+    if (!template) return;
+    const titles = template.titles.map((title) => (title.id === titleId ? { ...title, ...updates } : title));
+    await saveKidsAndTitles(template.kids, titles);
+  };
+
+  const addTitle = async () => {
+    if (!template) return;
+    await saveKidsAndTitles(template.kids, [...template.titles, buildPlaceholderTitle()]);
+  };
+
+  const removeTitle = async (titleId: string) => {
+    if (!template) return;
+    const titles = template.titles.filter((title) => title.id !== titleId);
+    const kids = template.kids.map((kid) => ({
+      ...kid,
+      titleIds: kid.titleIds.filter((kidTitleId) => kidTitleId !== titleId),
+    }));
+    await saveKidsAndTitles(kids, titles);
+  };
+
+  const toggleKidTitle = async (kidId: string, titleId: string) => {
+    if (!template) return;
+    const kids = template.kids.map((kid) =>
+      kid.id !== kidId
+        ? kid
+        : {
+            ...kid,
+            titleIds: kid.titleIds.includes(titleId)
+              ? kid.titleIds.filter((item) => item !== titleId)
+              : [...kid.titleIds, titleId],
+          },
+    );
+    await saveKidsAndTitles(kids, template.titles);
+  };
+
   const renderRewardRow = (
     reward: RewardDefinition,
     onEdit: () => void,
     onDelete: () => void,
     muted = false,
+    options?: { showControls?: boolean; prefix?: string },
   ) => (
     <Box
       key={reward.id}
@@ -453,21 +531,26 @@ const Rewards: React.FC = () => {
       }}
     >
       <Box sx={{ minWidth: 0 }}>
-        <Typography variant="body2">{formatReward(reward)}</Typography>
+        <Typography variant="body2">
+          {options?.prefix ? `${options.prefix} ` : ''}
+          {formatReward(reward)}
+        </Typography>
         {reward.description && (
           <Typography variant="caption" color="text.secondary">
             {reward.description}
           </Typography>
         )}
       </Box>
-      <Stack direction="row" spacing={0.25}>
-        <IconButton size="small" onClick={onEdit}>
-          <EditIcon fontSize="small" />
-        </IconButton>
-        <IconButton size="small" onClick={onDelete}>
-          <DeleteIcon fontSize="small" />
-        </IconButton>
-      </Stack>
+      {options?.showControls === false ? null : (
+        <Stack direction="row" spacing={0.25}>
+          <IconButton size="small" onClick={onEdit}>
+            <EditIcon fontSize="small" />
+          </IconButton>
+          <IconButton size="small" onClick={onDelete}>
+            <DeleteIcon fontSize="small" />
+          </IconButton>
+        </Stack>
+      )}
     </Box>
   );
 
@@ -479,6 +562,9 @@ const Rewards: React.FC = () => {
       currentLevel?: number;
       currentStep?: number;
       showLockedState?: boolean;
+      showStepMeta?: boolean;
+      showControls?: boolean;
+      rewardPrefix?: string;
     },
   ) => (
     <Stack divider={<Divider flexItem />} sx={{ borderTop: '1px solid', borderColor: 'divider' }}>
@@ -491,30 +577,39 @@ const Rewards: React.FC = () => {
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1 }}>
               <Box>
                 <Typography variant="subtitle2">{levelLabel}</Typography>
-                <Typography variant="caption" color="text.secondary">
-                  {level.stepCount} steps
-                  {options.showLockedState && index === options.currentLevel
-                    ? ` · current step ${options.currentStep}/${level.stepCount}`
-                    : isLocked
-                      ? ' · locked'
-                      : ' · unlocked'}
-                </Typography>
+                <Stack direction="row" spacing={0.25} alignItems="center">
+                  {options.showStepMeta === false ? null : (
+                    <Typography variant="caption" color="text.secondary">
+                      {level.stepCount} steps
+                      {options.showLockedState && index === options.currentLevel
+                        ? ` · current step ${options.currentStep}/${level.stepCount}`
+                        : isLocked
+                          ? ' · locked'
+                          : options.showLockedState
+                            ? ' · unlocked'
+                            : ''}
+                    </Typography>
+                  )}
+                  {options.showControls === false ? null : (
+                    <IconButton
+                      size="small"
+                      sx={{ p: 0.25 }}
+                      onClick={() =>
+                        setStepDialog({
+                          scope: options.scope,
+                          recordId: options.recordId,
+                          levelId: level.id,
+                          levelLabel,
+                          value: String(level.stepCount),
+                        })
+                      }
+                    >
+                      <EditIcon sx={{ fontSize: 14 }} />
+                    </IconButton>
+                  )}
+                </Stack>
               </Box>
-              <Stack direction="row" spacing={0.5} alignItems="center">
-                <IconButton
-                  size="small"
-                  onClick={() =>
-                    setStepDialog({
-                      scope: options.scope,
-                      recordId: options.recordId,
-                      levelId: level.id,
-                      levelLabel,
-                      value: String(level.stepCount),
-                    })
-                  }
-                >
-                  <EditIcon fontSize="small" />
-                </IconButton>
+              {options.showControls === false ? null : (
                 <Button
                   size="small"
                   onClick={() =>
@@ -527,7 +622,7 @@ const Rewards: React.FC = () => {
                 >
                   Add reward
                 </Button>
-              </Stack>
+              )}
             </Box>
             <Box sx={{ mt: 1 }}>
               {level.rewards.length === 0 ? (
@@ -550,6 +645,7 @@ const Rewards: React.FC = () => {
                         ? removeTemplateLevelReward(level.id, reward.id)
                         : removeWeekLevelReward(options.recordId!, level.id, reward.id)),
                     isLocked,
+                    { showControls: options.showControls, prefix: options.rewardPrefix },
                   ),
                 )
               )}
@@ -586,7 +682,7 @@ const Rewards: React.FC = () => {
   return (
     <Box
       sx={{
-        pb: 9,
+        pb: 12,
         minHeight: '100%',
         background:
           surfaceMode === 'execute'
@@ -637,7 +733,7 @@ const Rewards: React.FC = () => {
       )}
 
       {surfaceMode === 'execute' && (
-        <Stack spacing={2}>
+        <Stack spacing={2} sx={{ pb: 2 }}>
           <Tabs
             value={executeTab}
             onChange={(_event, value) => setExecuteTab(value)}
@@ -777,6 +873,9 @@ const Rewards: React.FC = () => {
                               currentLevel: record.currentLevel,
                               currentStep: record.currentStep,
                               showLockedState: true,
+                              showStepMeta: false,
+                              showControls: false,
+                              rewardPrefix: '›',
                             })}
                           </Box>
 
@@ -918,7 +1017,7 @@ const Rewards: React.FC = () => {
                                 }}
                               >
                                 <Box sx={{ minWidth: 0 }}>
-                                  <Typography variant="body2">{formatReward(reward)}</Typography>
+                                  <Typography variant="body2">{`› ${formatReward(reward)}`}</Typography>
                                   <Typography variant="caption" color="text.secondary">
                                     {formatRemaining(reward)}
                                     {reward.isCarryForward ? ' · Carry forward' : ''}
@@ -979,6 +1078,7 @@ const Rewards: React.FC = () => {
             sx={{ '& .MuiTab-root': { textTransform: 'none', fontWeight: 600 } }}
           >
             <Tab label="Manage" value="manage" />
+            <Tab label="Kids" value="kids" />
             <Tab label="Template" value="template" />
           </Tabs>
 
@@ -1040,6 +1140,120 @@ const Rewards: React.FC = () => {
             </Stack>
           )}
 
+          {editSection === 'kids' && (
+            <Stack spacing={2}>
+              <Card sx={{ borderRadius: 4 }}>
+                <CardContent sx={{ p: 2 }}>
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1.5 }}>
+                    <Typography variant="subtitle1">Titles</Typography>
+                    <Button size="small" onClick={() => void addTitle()}>
+                      Add title
+                    </Button>
+                  </Box>
+                  {template.titles.length === 0 ? (
+                    <Chip size="small" variant="outlined" label="No titles yet" />
+                  ) : (
+                    <Stack spacing={1} divider={<Divider flexItem />}>
+                      {template.titles.map((title) => (
+                        <Box key={title.id} sx={{ py: 0.5 }}>
+                          <Stack direction="row" spacing={1} alignItems="center">
+                            <TextField
+                              size="small"
+                              label="Title"
+                              fullWidth
+                              value={title.name}
+                              onChange={(event) => void updateTitle(title.id, { name: event.target.value })}
+                            />
+                            <TextField
+                              size="small"
+                              label="Step +"
+                              type="number"
+                              value={title.stepBoost}
+                              onChange={(event) =>
+                                void updateTitle(title.id, { stepBoost: Math.max(0, Number(event.target.value) || 0) })
+                              }
+                              sx={{ width: 110 }}
+                            />
+                            <IconButton size="small" onClick={() => void removeTitle(title.id)}>
+                              <DeleteIcon fontSize="small" />
+                            </IconButton>
+                          </Stack>
+                        </Box>
+                      ))}
+                    </Stack>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card sx={{ borderRadius: 4 }}>
+                <CardContent sx={{ p: 2 }}>
+                  <Typography variant="subtitle1" gutterBottom>
+                    Kids
+                  </Typography>
+                  <Stack direction="row" spacing={1} sx={{ mb: 1.5 }}>
+                    <TextField
+                      size="small"
+                      fullWidth
+                      label="Kid name"
+                      value={kidName}
+                      onChange={(event) => setKidName(event.target.value)}
+                    />
+                    <Button variant="contained" onClick={() => void addKid()}>
+                      Add
+                    </Button>
+                  </Stack>
+                  {template.kids.length === 0 ? (
+                    <Chip size="small" variant="outlined" label="No kids yet" />
+                  ) : (
+                    <Stack spacing={1.5}>
+                      {template.kids.map((kid) => (
+                        <Card key={kid.id} variant="outlined" sx={{ borderRadius: 3 }}>
+                          <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+                            <Stack spacing={1}>
+                              <Stack direction="row" spacing={1} alignItems="center">
+                                <TextField
+                                  size="small"
+                                  fullWidth
+                                  label="Name"
+                                  value={kid.name}
+                                  onChange={(event) => void updateKid(kid.id, { name: event.target.value })}
+                                />
+                                <IconButton size="small" onClick={() => void removeKid(kid.id)}>
+                                  <DeleteIcon fontSize="small" />
+                                </IconButton>
+                              </Stack>
+                              <Stack direction="row" spacing={0.75} useFlexGap flexWrap="wrap">
+                                {template.titles.length === 0 ? (
+                                  <Chip size="small" variant="outlined" label="No titles available" />
+                                ) : (
+                                  template.titles.map((title) => (
+                                    <Chip
+                                      key={title.id}
+                                      size="small"
+                                      label={`${title.name} +${title.stepBoost}`}
+                                      color={kid.titleIds.includes(title.id) ? 'primary' : 'default'}
+                                      variant={kid.titleIds.includes(title.id) ? 'filled' : 'outlined'}
+                                      onClick={() => void toggleKidTitle(kid.id, title.id)}
+                                    />
+                                  ))
+                                )}
+                              </Stack>
+                              {kid.titleIds.length === 0 ? null : (
+                                <Typography variant="caption" color="text.secondary">
+                                  Assigned: {kid.titleIds.map((titleId) => titleNameMap.get(titleId) || 'Title').join(', ')}
+                                </Typography>
+                              )}
+                            </Stack>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </Stack>
+                  )}
+                </CardContent>
+              </Card>
+            </Stack>
+          )}
+
           {editSection === 'template' && (
             <Stack spacing={2}>
               <Card sx={{ borderRadius: 4 }}>
@@ -1078,52 +1292,6 @@ const Rewards: React.FC = () => {
                       </FormControl>
                     </Stack>
 
-                    <Box>
-                      <Typography variant="subtitle1" gutterBottom>
-                        Kids
-                      </Typography>
-                      <Stack direction="row" spacing={1} sx={{ mb: 1.5 }}>
-                        <TextField
-                          size="small"
-                          fullWidth
-                          label="Kid name"
-                          value={kidName}
-                          onChange={(event) => setKidName(event.target.value)}
-                        />
-                        <Button
-                          variant="contained"
-                          onClick={() => {
-                            if (!kidName.trim()) return;
-                            void saveTemplate({
-                              kids: [...template.kids, { id: crypto.randomUUID(), name: kidName.trim() }],
-                            });
-                            setKidName('');
-                          }}
-                        >
-                          Add
-                        </Button>
-                      </Stack>
-                      <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
-                        {template.kids.length === 0 ? (
-                          <Chip size="small" variant="outlined" label="No kids yet" />
-                        ) : (
-                          template.kids.map((kid) => (
-                            <Chip
-                              key={kid.id}
-                              size="small"
-                              label={kid.name}
-                              sx={{
-                                backgroundColor: getKidAccent(kid.id).soft,
-                                color: getKidAccent(kid.id).text,
-                              }}
-                              onDelete={() =>
-                                void saveTemplate({ kids: template.kids.filter((item) => item.id !== kid.id) })
-                              }
-                            />
-                          ))
-                        )}
-                      </Stack>
-                    </Box>
                   </Stack>
                 </CardContent>
               </Card>
@@ -1255,22 +1423,14 @@ const Rewards: React.FC = () => {
             <Button
               variant="outlined"
               onClick={() => {
-                void freezeCurrentWeek(false);
+                void loadFreezePreview();
+                setFreezeCarryForward(false);
+                setFreezeDialogOpen(true);
                 setActionsOpen(false);
               }}
-              disabled={visibleCurrentKids.length === 0}
+              disabled={!canFreezeCurrentWeek}
             >
               Freeze Current Week
-            </Button>
-            <Button
-              variant="outlined"
-              onClick={() => {
-                void freezeCurrentWeek(true);
-                setActionsOpen(false);
-              }}
-              disabled={visibleCurrentKids.length === 0}
-            >
-              Freeze And Carry Forward Unused Rewards
             </Button>
             <Button
               variant="outlined"
@@ -1296,6 +1456,89 @@ const Rewards: React.FC = () => {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setActionsOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={freezeDialogOpen} onClose={() => setFreezeDialogOpen(false)} fullWidth maxWidth="sm">
+        <DialogTitle>Freeze Current Week</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ mt: 1 }}>
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={freezeCarryForward}
+                  onChange={(event) => setFreezeCarryForward(event.target.checked)}
+                />
+              }
+              label="Carry forward unused rewards from last week"
+            />
+            {freezePreview.length === 0 ? (
+              <Typography variant="body2" color="text.secondary">
+                No pending rewards to preview.
+              </Typography>
+            ) : (
+              freezePreview.map((previewKid) => (
+                <Card key={previewKid.recordId} variant="outlined" sx={{ borderRadius: 3 }}>
+                  <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+                    <Stack spacing={1}>
+                      <Typography variant="subtitle2">{previewKid.kidName}</Typography>
+                      <Box>
+                        <Typography variant="caption" color="text.secondary">
+                          Pending rewards
+                        </Typography>
+                        <Stack spacing={0.4} sx={{ mt: 0.5 }}>
+                          {previewKid.pendingRewards.length === 0 ? (
+                            <Typography variant="body2" color="text.secondary">
+                              No rewards unlocked yet.
+                            </Typography>
+                          ) : (
+                            previewKid.pendingRewards.map((reward) => (
+                              <Typography key={reward.id} variant="body2">
+                                {`› ${formatReward(reward)}`}
+                              </Typography>
+                            ))
+                          )}
+                        </Stack>
+                      </Box>
+                      {freezeCarryForward ? (
+                        <Box>
+                          <Typography variant="caption" color="text.secondary">
+                            Carry-forward rewards
+                          </Typography>
+                          <Stack spacing={0.4} sx={{ mt: 0.5 }}>
+                            {previewKid.carryForwardRewards.length === 0 ? (
+                              <Typography variant="body2" color="text.secondary">
+                                No unused rewards to carry forward.
+                              </Typography>
+                            ) : (
+                              previewKid.carryForwardRewards.map((reward) => (
+                                <Typography key={reward.id} variant="body2">
+                                  {`› ${formatReward(reward)}`}
+                                </Typography>
+                              ))
+                            )}
+                          </Stack>
+                        </Box>
+                      ) : null}
+                    </Stack>
+                  </CardContent>
+                </Card>
+              ))
+            )}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setFreezeDialogOpen(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            disabled={!canFreezeCurrentWeek}
+            onClick={() => {
+              void freezeCurrentWeek(freezeCarryForward);
+              setFreezeDialogOpen(false);
+            }}
+          >
+            {freezeCarryForward ? 'Move To Rewards For Current Week' : 'Freeze Week'}
+          </Button>
         </DialogActions>
       </Dialog>
 
