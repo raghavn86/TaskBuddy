@@ -12,6 +12,7 @@ import {
   instantiateNextRewardWeek,
   isRewardBoundaryDay,
   openNextRewardWeek,
+  previewFreezeRewardWeek,
   resetRewardProgress,
   setKidStepDelta,
   syncCurrentAndFutureRewardWeeksFromTemplate,
@@ -145,14 +146,17 @@ describe('rewardServices', () => {
     await setKidStepDelta(currentWeek1.id, 1);
     const frozenWeek1 = await freezeRewardWeek(template.partnershipId, 1, true);
     const avaFrozenWeek1 = frozenWeek1.find((record) => record.kidId === 'kid-a')!;
-    const stickerReward = avaFrozenWeek1.earnedRewards.find((reward) => reward.title === 'Sticker')!;
+    const currentStickerReward = avaFrozenWeek1.earnedRewards.find(
+      (reward) => reward.title === 'Sticker' && reward.source === 'level',
+    )!;
+    const carryForwardStickerReward = avaFrozenWeek1.earnedRewards.find(
+      (reward) => reward.title === 'Sticker' && reward.source === 'carry_forward',
+    )!;
 
-    expect(avaFrozenWeek1.earnedRewards).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ title: 'Sticker', quantity: 4, isCarryForward: true }),
-      ]),
-    );
-    expect(stickerReward.isCarryForward).toBe(true);
+    expect(currentStickerReward.quantity).toBe(1);
+    expect(currentStickerReward.isCarryForward).toBe(false);
+    expect(carryForwardStickerReward.quantity).toBe(3);
+    expect(carryForwardStickerReward.isCarryForward).toBe(true);
   });
 
   it('opens the next week and optionally carries only the level forward', async () => {
@@ -200,6 +204,52 @@ describe('rewardServices', () => {
     });
     const restoredReward = restored.earnedRewards.find((reward) => reward.id === stickerReward.id)!;
     expect(restoredReward.remainingQuantity).toBe(stickerReward.remainingQuantity);
+  });
+
+  it('includes manual rewards in freeze output without merging them into level rewards', async () => {
+    const template = await buildTemplate();
+    const [record] = await instantiateNextRewardWeek(template);
+
+    await addManualRewardToWeek(record.id, {
+      id: 'manual-2',
+      title: 'Sticker',
+      quantity: 1,
+    });
+
+    const frozenWeek = await freezeRewardWeek(template.partnershipId, 0, false);
+    const frozenRecord = frozenWeek.find((item) => item.id === record.id)!;
+
+    const levelSticker = frozenRecord.earnedRewards.find(
+      (reward) => reward.title === 'Sticker' && reward.source === 'level',
+    );
+    const manualSticker = frozenRecord.earnedRewards.find(
+      (reward) => reward.title === 'Sticker' && reward.source === 'manual',
+    );
+
+    expect(levelSticker?.quantity).toBe(1);
+    expect(manualSticker?.quantity).toBe(1);
+  });
+
+  it('shows manual rewards separately in freeze preview', async () => {
+    const template = await buildTemplate();
+    const [record] = await instantiateNextRewardWeek(template);
+
+    await addManualRewardToWeek(record.id, {
+      id: 'manual-3',
+      title: 'Bonus Game',
+      quantity: 1,
+      description: 'Picked for extra effort',
+    });
+
+    const preview = await previewFreezeRewardWeek(template.partnershipId, 0);
+    const kidPreview = preview.find((item) => item.recordId === record.id)!;
+
+    expect(kidPreview.pendingLevelRewards.some((reward) => reward.source === 'level')).toBe(true);
+    expect(kidPreview.pendingManualRewards).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ title: 'Bonus Game', source: 'manual' }),
+      ]),
+    );
   });
 
   it('rejects optimistic step updates when the source state changed', async () => {

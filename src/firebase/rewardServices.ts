@@ -116,6 +116,24 @@ const mergeRewardInstances = (rewards: RewardInstance[]): RewardInstance[] => {
   return Array.from(merged.values());
 };
 
+const mergeRewardInstancesBySource = (rewards: RewardInstance[]): RewardInstance[] => {
+  const groups = new Map<RewardInstance['source'], RewardInstance[]>();
+
+  rewards.forEach((reward) => {
+    const existing = groups.get(reward.source) || [];
+    existing.push(reward);
+    groups.set(reward.source, existing);
+  });
+
+  return (['level', 'manual', 'carry_forward'] as const).flatMap((source) =>
+    mergeRewardInstances(groups.get(source) || []).map((reward) => ({
+      ...reward,
+      source,
+      isCarryForward: source === 'carry_forward' ? reward.isCarryForward ?? true : false,
+    })),
+  );
+};
+
 const toRewardInstance = (
   reward: RewardDefinition,
   source: RewardInstance['source'],
@@ -490,6 +508,15 @@ const buildCumulativeRewards = (record: RewardWeekKidRecord): RewardInstance[] =
   return mergeRewardInstances(levelRewards);
 };
 
+const buildManualRewards = (record: RewardWeekKidRecord): RewardInstance[] =>
+  mergeRewardInstances(
+    record.manualRewards.map((reward) => ({
+      ...reward,
+      source: 'manual',
+      isCarryForward: false,
+    })),
+  );
+
 const getUnusedRewardsForCarryForward = (record: RewardWeekKidRecord): RewardInstance[] =>
   record.earnedRewards
     .filter((reward) => {
@@ -525,8 +552,9 @@ export const freezeRewardWeek = async (
     const previousRecord = previousWeekRecords.find((item) => item.kidId === record.kidId);
     const carryForwardRewards =
       carryForwardUnusedRewards && previousRecord ? getUnusedRewardsForCarryForward(previousRecord) : [];
-    const mergedRewards = mergeRewardInstances([
+    const mergedRewards = mergeRewardInstancesBySource([
       ...buildCumulativeRewards(record),
+      ...buildManualRewards(record),
       ...carryForwardRewards,
     ]);
 
@@ -599,7 +627,8 @@ export const previewFreezeRewardWeek = async (
     recordId: record.id,
     kidId: record.kidId,
     kidName: record.kidName,
-    pendingRewards: buildCumulativeRewards(record),
+    pendingLevelRewards: buildCumulativeRewards(record),
+    pendingManualRewards: buildManualRewards(record),
     carryForwardRewards: previousWeekRecords.find((item) => item.kidId === record.kidId)
       ? getUnusedRewardsForCarryForward(previousWeekRecords.find((item) => item.kidId === record.kidId)!)
       : [],

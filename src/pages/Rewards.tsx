@@ -32,6 +32,7 @@ import {
   DeleteOutline as DeleteIcon,
   EditOutlined as EditIcon,
   ErrorOutline as ErrorIcon,
+  InfoOutlined as InfoIcon,
   MoreHoriz as ActionsIcon,
   Remove as RemoveIcon,
   RestartAlt as ResetIcon,
@@ -62,6 +63,12 @@ type StepDialogState = {
   value: string;
   recordId?: string;
 } | null;
+
+type StandbyPickerState =
+  | { kind: 'template-level'; levelId: string }
+  | { kind: 'week-level'; recordId: string; levelId: string }
+  | { kind: 'week-manual'; recordId: string }
+  | null;
 
 type KidAccent = {
   solid: string;
@@ -261,6 +268,8 @@ const Rewards: React.FC = () => {
   );
   const [availabilityDraft, setAvailabilityDraft] = useState({ quantity: '0', amount: '' });
   const [stepDialog, setStepDialog] = useState<StepDialogState>(null);
+  const [standbyPicker, setStandbyPicker] = useState<StandbyPickerState>(null);
+  const [rewardInfo, setRewardInfo] = useState<RewardDefinition | RewardInstance | null>(null);
   const [actionsOpen, setActionsOpen] = useState(false);
   const [freezeDialogOpen, setFreezeDialogOpen] = useState(false);
   const [freezeCarryForward, setFreezeCarryForward] = useState(false);
@@ -514,6 +523,119 @@ const Rewards: React.FC = () => {
     await saveKidsAndTitles(kids, template.titles);
   };
 
+  const applyStandbyReward = async (reward: RewardDefinition) => {
+    if (!template || !standbyPicker) return;
+
+    const clonedReward: RewardDefinition = {
+      ...reward,
+      id: crypto.randomUUID(),
+    };
+
+    if (standbyPicker.kind === 'template-level') {
+      const levels = template.levels.map((level) =>
+        level.id === standbyPicker.levelId ? { ...level, rewards: [...level.rewards, clonedReward] } : level,
+      );
+      await saveTemplate({ levels });
+      setStandbyPicker(null);
+      return;
+    }
+
+    if (standbyPicker.kind === 'week-manual') {
+      await addManualReward(standbyPicker.recordId, clonedReward);
+      setStandbyPicker(null);
+      return;
+    }
+
+    const record = orderedWeeks.flatMap((group) => group.kids).find((item) => item.id === standbyPicker.recordId);
+    if (!record) return;
+    const levels = record.levels.map((level) =>
+      level.id === standbyPicker.levelId ? { ...level, rewards: [...level.rewards, clonedReward] } : level,
+    );
+    await updateWeekLevels(record.id, levels);
+    setStandbyPicker(null);
+  };
+
+  const renderRewardSection = (
+    title: string,
+    rewards: RewardInstance[],
+    recordId: string,
+    emptyLabel: string,
+    options?: { allowConsume?: boolean; showCarryForwardLabel?: boolean },
+  ) => (
+    <Box>
+      <Typography variant="subtitle2" sx={{ mb: 1 }}>
+        {title}
+      </Typography>
+      {rewards.length === 0 ? (
+        <Typography variant="body2" color="text.secondary">
+          {emptyLabel}
+        </Typography>
+      ) : (
+        rewards.map((reward, index) => (
+          <Box
+            key={reward.id}
+            sx={{
+              py: 1,
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'flex-start',
+              gap: 1,
+              borderTop: index === 0 ? '1px solid' : 'none',
+              borderColor: 'divider',
+            }}
+          >
+            <Box sx={{ minWidth: 0 }}>
+              <Stack direction="row" spacing={0.5} alignItems="center">
+                <Typography variant="body2">{`› ${formatReward(reward)}`}</Typography>
+                {reward.description ? (
+                  <IconButton size="small" sx={{ p: 0.25 }} onClick={() => setRewardInfo(reward)}>
+                    <InfoIcon sx={{ fontSize: 14 }} />
+                  </IconButton>
+                ) : null}
+              </Stack>
+              <Typography variant="caption" color="text.secondary">
+                {formatRemaining(reward)}
+                {options?.showCarryForwardLabel && reward.isCarryForward ? ' · Carry forward' : ''}
+              </Typography>
+            </Box>
+            <Stack direction="row" spacing={0.5} alignItems="center">
+              {options?.allowConsume !== false && reward.amount === undefined ? (
+                <>
+                  <IconButton
+                    size="small"
+                    onClick={() => void consumeReward(recordId, reward.id)}
+                    disabled={reward.remainingQuantity <= 0}
+                  >
+                    <RemoveIcon fontSize="small" />
+                  </IconButton>
+                  <IconButton
+                    size="small"
+                    onClick={() => void restoreReward(recordId, reward.id)}
+                    disabled={reward.remainingQuantity >= reward.quantity}
+                  >
+                    <AddIcon fontSize="small" />
+                  </IconButton>
+                </>
+              ) : null}
+              <IconButton
+                size="small"
+                onClick={() => {
+                  setAvailabilityDialog({ recordId, reward });
+                  setAvailabilityDraft({
+                    quantity: String(reward.remainingQuantity),
+                    amount: reward.remainingAmount === undefined ? '' : String(reward.remainingAmount),
+                  });
+                }}
+              >
+                <EditIcon fontSize="small" />
+              </IconButton>
+            </Stack>
+          </Box>
+        ))
+      )}
+    </Box>
+  );
+
   const renderRewardRow = (
     reward: RewardDefinition,
     onEdit: () => void,
@@ -542,14 +664,14 @@ const Rewards: React.FC = () => {
           {options?.prefix ? `${options.prefix} ` : ''}
           {formatReward(reward)}
         </Typography>
-        {reward.description && (
-          <Typography variant="caption" color="text.secondary">
-            {reward.description}
-          </Typography>
-        )}
       </Box>
       {options?.showControls === false ? null : (
         <Stack direction="row" spacing={0.25}>
+          {reward.description ? (
+            <IconButton size="small" onClick={() => setRewardInfo(reward)}>
+              <InfoIcon fontSize="small" />
+            </IconButton>
+          ) : null}
           <IconButton size="small" onClick={onEdit}>
             <EditIcon fontSize="small" />
           </IconButton>
@@ -640,18 +762,35 @@ const Rewards: React.FC = () => {
                 </Stack>
               </Box>
               {options.showControls === false ? null : (
-                <Button
-                  size="small"
-                  onClick={() =>
-                    void addPlaceholderReward(
-                      options.scope === 'template'
-                        ? { kind: 'template-level', levelId: level.id }
-                        : { kind: 'week-level', recordId: options.recordId!, levelId: level.id },
-                    )
-                  }
-                >
-                  Add reward
-                </Button>
+                <Stack direction="row" spacing={0.5}>
+                  <Button
+                    size="small"
+                    onClick={() =>
+                      void addPlaceholderReward(
+                        options.scope === 'template'
+                          ? { kind: 'template-level', levelId: level.id }
+                          : { kind: 'week-level', recordId: options.recordId!, levelId: level.id },
+                      )
+                    }
+                  >
+                    Add reward
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="text"
+                    startIcon={<AutoAwesomeIcon sx={{ fontSize: 14 }} />}
+                    onClick={() =>
+                      setStandbyPicker(
+                        options.scope === 'template'
+                          ? { kind: 'template-level', levelId: level.id }
+                          : { kind: 'week-level', recordId: options.recordId!, levelId: level.id },
+                      )
+                    }
+                    disabled={(template?.standbyRewards.length || 0) === 0}
+                  >
+                    Standby
+                  </Button>
+                </Stack>
               )}
             </Box>
             <Box sx={{ mt: 1 }}>
@@ -919,9 +1058,20 @@ const Rewards: React.FC = () => {
                           <Box>
                             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
                               <Typography variant="subtitle2">Manual Rewards</Typography>
-                              <Button size="small" onClick={() => void addPlaceholderReward({ kind: 'week-manual', recordId: record.id })}>
-                                Add reward
-                              </Button>
+                              <Stack direction="row" spacing={0.5}>
+                                <Button size="small" onClick={() => void addPlaceholderReward({ kind: 'week-manual', recordId: record.id })}>
+                                  Add reward
+                                </Button>
+                                <Button
+                                  size="small"
+                                  variant="text"
+                                  startIcon={<AutoAwesomeIcon sx={{ fontSize: 14 }} />}
+                                  onClick={() => setStandbyPicker({ kind: 'week-manual', recordId: record.id })}
+                                  disabled={template.standbyRewards.length === 0}
+                                >
+                                  Standby
+                                </Button>
+                              </Stack>
                             </Box>
                             {record.manualRewards.length === 0 ? (
                               <Chip size="small" variant="outlined" label="No manual rewards yet" />
@@ -1021,10 +1171,13 @@ const Rewards: React.FC = () => {
               ) : (
                 visibleRewardSourceKids.map((record) => {
                   const accent = getKidAccent(record.kidId);
+                  const levelRewards = record.earnedRewards.filter((reward) => reward.source === 'level');
+                  const manualRewards = record.earnedRewards.filter((reward) => reward.source === 'manual');
+                  const carryForwardRewards = record.earnedRewards.filter((reward) => reward.source === 'carry_forward');
                   return (
                     <Card key={record.id} sx={{ borderRadius: 4, border: '1px solid', borderColor: accent.softBorder }}>
                       <CardContent sx={{ p: 2 }}>
-                        <Stack spacing={1.5}>
+                        <Stack spacing={2}>
                           <Box>
                             <Typography variant="h6" sx={{ color: accent.text }}>
                               {record.kidName}
@@ -1038,60 +1191,17 @@ const Rewards: React.FC = () => {
                               No rewards available.
                             </Typography>
                           ) : (
-                            record.earnedRewards.map((reward) => (
-                              <Box
-                                key={reward.id}
-                                sx={{
-                                  py: 1,
-                                  display: 'flex',
-                                  justifyContent: 'space-between',
-                                  alignItems: 'flex-start',
-                                  gap: 1,
-                                  borderTop: '1px solid',
-                                  borderColor: 'divider',
-                                }}
-                              >
-                                <Box sx={{ minWidth: 0 }}>
-                                  <Typography variant="body2">{`› ${formatReward(reward)}`}</Typography>
-                                  <Typography variant="caption" color="text.secondary">
-                                    {formatRemaining(reward)}
-                                    {reward.isCarryForward ? ' · Carry forward' : ''}
-                                  </Typography>
-                                </Box>
-                                <Stack direction="row" spacing={0.5} alignItems="center">
-                                  {reward.amount === undefined ? (
-                                    <>
-                                      <IconButton
-                                        size="small"
-                                        onClick={() => void consumeReward(record.id, reward.id)}
-                                        disabled={reward.remainingQuantity <= 0}
-                                      >
-                                        <RemoveIcon fontSize="small" />
-                                      </IconButton>
-                                      <IconButton
-                                        size="small"
-                                        onClick={() => void restoreReward(record.id, reward.id)}
-                                        disabled={reward.remainingQuantity >= reward.quantity}
-                                      >
-                                        <AddIcon fontSize="small" />
-                                      </IconButton>
-                                    </>
-                                  ) : null}
-                                  <IconButton
-                                    size="small"
-                                    onClick={() => {
-                                      setAvailabilityDialog({ recordId: record.id, reward });
-                                      setAvailabilityDraft({
-                                        quantity: String(reward.remainingQuantity),
-                                        amount: reward.remainingAmount === undefined ? '' : String(reward.remainingAmount),
-                                      });
-                                    }}
-                                  >
-                                    <EditIcon fontSize="small" />
-                                  </IconButton>
-                                </Stack>
-                              </Box>
-                            ))
+                            <Stack spacing={2}>
+                              {renderRewardSection('Level Rewards', levelRewards, record.id, 'No level rewards available.')}
+                              {renderRewardSection('Manual Rewards', manualRewards, record.id, 'No manual rewards available.')}
+                              {renderRewardSection(
+                                'Carry Forward',
+                                carryForwardRewards,
+                                record.id,
+                                'No carry-forward rewards available.',
+                                { showCarryForwardLabel: true },
+                              )}
+                            </Stack>
                           )}
                         </Stack>
                       </CardContent>
@@ -1515,15 +1625,33 @@ const Rewards: React.FC = () => {
                       <Typography variant="subtitle2">{previewKid.kidName}</Typography>
                       <Box>
                         <Typography variant="caption" color="text.secondary">
-                          Pending rewards
+                          Level rewards
                         </Typography>
                         <Stack spacing={0.4} sx={{ mt: 0.5 }}>
-                          {previewKid.pendingRewards.length === 0 ? (
+                          {previewKid.pendingLevelRewards.length === 0 ? (
                             <Typography variant="body2" color="text.secondary">
                               No rewards unlocked yet.
                             </Typography>
                           ) : (
-                            previewKid.pendingRewards.map((reward) => (
+                            previewKid.pendingLevelRewards.map((reward) => (
+                              <Typography key={reward.id} variant="body2">
+                                {`› ${formatReward(reward)}`}
+                              </Typography>
+                            ))
+                          )}
+                        </Stack>
+                      </Box>
+                      <Box>
+                        <Typography variant="caption" color="text.secondary">
+                          Manual rewards
+                        </Typography>
+                        <Stack spacing={0.4} sx={{ mt: 0.5 }}>
+                          {previewKid.pendingManualRewards.length === 0 ? (
+                            <Typography variant="body2" color="text.secondary">
+                              No manual rewards added.
+                            </Typography>
+                          ) : (
+                            previewKid.pendingManualRewards.map((reward) => (
                               <Typography key={reward.id} variant="body2">
                                 {`› ${formatReward(reward)}`}
                               </Typography>
@@ -1716,6 +1844,67 @@ const Rewards: React.FC = () => {
           >
             Save
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(standbyPicker)} onClose={() => setStandbyPicker(null)} fullWidth maxWidth="sm">
+        <DialogTitle>Add From Standby</DialogTitle>
+        <DialogContent>
+          <Stack spacing={1.25} sx={{ mt: 1 }}>
+            {template.standbyRewards.length === 0 ? (
+              <Typography variant="body2" color="text.secondary">
+                No standby rewards yet. Add them in Template first.
+              </Typography>
+            ) : (
+              template.standbyRewards.map((reward) => (
+                <Box
+                  key={reward.id}
+                  sx={{
+                    p: 1.25,
+                    borderRadius: 2,
+                    border: '1px solid',
+                    borderColor: 'divider',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'flex-start',
+                    gap: 1,
+                  }}
+                >
+                  <Box sx={{ minWidth: 0 }}>
+                    <Stack direction="row" spacing={0.5} alignItems="center">
+                      <Typography variant="body2">{formatReward(reward)}</Typography>
+                      {reward.description ? (
+                        <IconButton size="small" sx={{ p: 0.25 }} onClick={() => setRewardInfo(reward)}>
+                          <InfoIcon sx={{ fontSize: 14 }} />
+                        </IconButton>
+                      ) : null}
+                    </Stack>
+                  </Box>
+                  <Button size="small" variant="contained" onClick={() => void applyStandbyReward(reward)}>
+                    Use
+                  </Button>
+                </Box>
+              ))
+            )}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setStandbyPicker(null)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(rewardInfo)} onClose={() => setRewardInfo(null)} fullWidth maxWidth="xs">
+        <DialogTitle>{rewardInfo?.title || 'Reward'}</DialogTitle>
+        <DialogContent>
+          <Stack spacing={1} sx={{ mt: 1 }}>
+            <Typography variant="body2">{rewardInfo ? formatReward(rewardInfo) : ''}</Typography>
+            <Typography variant="body2" color="text.secondary">
+              {rewardInfo?.description || 'No extra description.'}
+            </Typography>
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRewardInfo(null)}>Close</Button>
         </DialogActions>
       </Dialog>
     </Box>

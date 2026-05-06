@@ -93,6 +93,7 @@ export interface RewardFreezePreviewKid {
   recordId: string;
   kidId: string;
   kidName: string;
-  pendingRewards: RewardInstance[];
+  pendingLevelRewards: RewardInstance[];
+  pendingManualRewards: RewardInstance[];
   carryForwardRewards: RewardInstance[];
 }
