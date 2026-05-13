@@ -45,9 +45,10 @@ export interface RewardTemplate {
 
 export interface RewardNote {
   id: string;
-  type: 'good' | 'bad';
+  type: 'good' | 'bad' | 'adjustment';
   text: string;
   createdAt: number;
+  delta?: number;
 }
 
 export interface RewardInstance {

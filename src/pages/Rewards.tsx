@@ -41,9 +41,9 @@ import {
 } from '@mui/icons-material';
 import Loading from '../components/common/Loading';
 import { useRewards } from '../context/RewardsContext';
-import { RewardDefinition, RewardInstance, RewardKid, RewardLevel, RewardNote, RewardTitle, RewardWeekGroup, RewardWeekKidRecord } from '../types';
+import { RewardDefinition, RewardInstance, RewardKid, RewardLevel, RewardTitle, RewardWeekGroup, RewardWeekKidRecord } from '../types';
 
-type ExecuteTab = 'levels' | 'current' | 'last';
+type ExecuteTab = 'tracking' | 'rewards' | 'archive';
 type SurfaceMode = 'execute' | 'edit';
 type EditSection = 'manage' | 'kids' | 'template';
 type RewardEditorMode = 'template-level' | 'template-standby' | 'week-level' | 'week-manual';
@@ -162,6 +162,14 @@ const getSyncIcon = (state?: string) => {
 const formatWeekChip = (group: RewardWeekGroup, currentWeekOrder: number) =>
   group.weekOrder === currentWeekOrder ? 'Current' : `W${group.weekOrder + 1}`;
 
+const formatTrackingDelta = (delta?: number) => {
+  if (!delta) {
+    return '';
+  }
+
+  return delta > 0 ? `+${delta}` : String(delta);
+};
+
 const LevelTower: React.FC<{
   levels: RewardLevel[];
   currentLevel: number;
@@ -230,7 +238,6 @@ const Rewards: React.FC = () => {
     template,
     weekGroups,
     currentWeek,
-    rewardSourceWeek,
     freezePreview,
     canFreezeCurrentWeek,
     canUnfreezeCurrentWeek,
@@ -245,8 +252,8 @@ const Rewards: React.FC = () => {
     freezeCurrentWeek,
     unfreezeCurrentWeek,
     openCurrentNextWeek,
-    changeKidStep,
-    addNote,
+    commitTrackingChange,
+    removeTrackingEntry,
     addManualReward,
     consumeReward,
     restoreReward,
@@ -256,11 +263,12 @@ const Rewards: React.FC = () => {
   } = useRewards();
 
   const [surfaceMode, setSurfaceMode] = useState<SurfaceMode>('execute');
-  const [executeTab, setExecuteTab] = useState<ExecuteTab>('levels');
+  const [executeTab, setExecuteTab] = useState<ExecuteTab>('tracking');
   const [editSection, setEditSection] = useState<EditSection>('manage');
   const [manageWeek, setManageWeek] = useState(0);
+  const [selectedKidId, setSelectedKidId] = useState('');
+  const [archiveWeekOrder, setArchiveWeekOrder] = useState<number | ''>('');
   const [kidName, setKidName] = useState('');
-  const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
   const [rewardDialog, setRewardDialog] = useState<RewardEditorState>(null);
   const [rewardDraft, setRewardDraft] = useState(buildDraft());
   const [availabilityDialog, setAvailabilityDialog] = useState<null | { recordId: string; reward: RewardInstance }>(
@@ -270,6 +278,7 @@ const Rewards: React.FC = () => {
   const [stepDialog, setStepDialog] = useState<StepDialogState>(null);
   const [standbyPicker, setStandbyPicker] = useState<StandbyPickerState>(null);
   const [rewardInfo, setRewardInfo] = useState<RewardDefinition | RewardInstance | null>(null);
+  const [trackingDrafts, setTrackingDrafts] = useState<Record<string, { delta: number; reason: string }>>({});
   const [actionsOpen, setActionsOpen] = useState(false);
   const [freezeDialogOpen, setFreezeDialogOpen] = useState(false);
   const [freezeCarryForward, setFreezeCarryForward] = useState(false);
@@ -277,17 +286,88 @@ const Rewards: React.FC = () => {
 
   const orderedWeeks = useMemo(() => [...weekGroups].sort((a, b) => a.weekOrder - b.weekOrder), [weekGroups]);
   const visibleCurrentKids = useMemo(() => dedupeKidRecords(currentWeek?.kids || []), [currentWeek?.kids]);
-  const visibleRewardSourceKids = useMemo(() => dedupeKidRecords(rewardSourceWeek?.kids || []), [rewardSourceWeek?.kids]);
   const selectedManageGroup =
     orderedWeeks.find((group) => group.weekOrder === manageWeek) || orderedWeeks[0] || null;
   const visibleManageKids = useMemo(
     () => dedupeKidRecords(selectedManageGroup?.kids || []),
     [selectedManageGroup?.kids],
   );
+  const availableKidTabs = useMemo(
+    () => {
+      if (visibleCurrentKids.length > 0) {
+        return visibleCurrentKids;
+      }
+      if (!template) {
+        return [];
+      }
+
+      return template.kids.map((kid) => ({
+        id: `template-${kid.id}`,
+        partnershipId: template.partnershipId,
+        templateId: template.id,
+        weekOrder: template.currentWeekOrder,
+        kidId: kid.id,
+        kidName: kid.name,
+        titleIds: kid.titleIds,
+        appliedTitleBoost: 0,
+        createdAt: 0,
+        updatedAt: 0,
+        levels: template.levels,
+        currentLevel: template.defaultStartLevel,
+        currentStep: 1,
+        manualRewards: [],
+        earnedRewards: [],
+        notes: [],
+      } as RewardWeekKidRecord));
+    },
+    [template, visibleCurrentKids],
+  );
+  const selectedCurrentRecord = useMemo(
+    () => visibleCurrentKids.find((record) => record.kidId === selectedKidId) || visibleCurrentKids[0] || null,
+    [selectedKidId, visibleCurrentKids],
+  );
+  const archiveWeekOptions = useMemo(
+    () => orderedWeeks.filter((group) => group.weekOrder < (template?.currentWeekOrder ?? 0)),
+    [orderedWeeks, template?.currentWeekOrder],
+  );
+  const selectedArchiveRecord = useMemo(() => {
+    if (!selectedKidId || archiveWeekOrder === '') {
+      return null;
+    }
+
+    return (
+      archiveWeekOptions
+        .find((group) => group.weekOrder === archiveWeekOrder)
+        ?.kids.find((record) => record.kidId === selectedKidId) || null
+    );
+  }, [archiveWeekOptions, archiveWeekOrder, selectedKidId]);
 
   useEffect(() => {
     setManageWeek(template?.currentWeekOrder || 0);
   }, [template?.currentWeekOrder]);
+
+  useEffect(() => {
+    if (!selectedKidId && availableKidTabs[0]?.kidId) {
+      setSelectedKidId(availableKidTabs[0].kidId);
+      return;
+    }
+
+    if (selectedKidId && !availableKidTabs.some((kid) => kid.kidId === selectedKidId)) {
+      setSelectedKidId(availableKidTabs[0]?.kidId || '');
+    }
+  }, [availableKidTabs, selectedKidId]);
+
+  useEffect(() => {
+    const defaultArchiveWeek = archiveWeekOptions[archiveWeekOptions.length - 1]?.weekOrder;
+    if (defaultArchiveWeek === undefined) {
+      setArchiveWeekOrder('');
+      return;
+    }
+
+    if (archiveWeekOrder === '' || !archiveWeekOptions.some((group) => group.weekOrder === archiveWeekOrder)) {
+      setArchiveWeekOrder(defaultArchiveWeek);
+    }
+  }, [archiveWeekOptions, archiveWeekOrder]);
 
   const canOpenNextWeek = Boolean(
     template &&
@@ -868,21 +948,6 @@ const Rewards: React.FC = () => {
           <Typography variant="h5" gutterBottom>
             Rewards
           </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-            Boundary day: {dayOptions.find((day) => day.value === template.weekBoundaryDay)?.label}
-          </Typography>
-          <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
-            <Chip
-              size="small"
-              color="primary"
-              label={currentWeek ? `${formatWeekChip(currentWeek, template.currentWeekOrder)} · tracking` : 'No active week'}
-            />
-            <Chip
-              size="small"
-              variant="outlined"
-              label={rewardSourceWeek ? `Last rewards · W${rewardSourceWeek.weekOrder + 1}` : 'No last-week rewards'}
-            />
-          </Stack>
         </Box>
         <Button
           variant={surfaceMode === 'edit' ? 'contained' : 'outlined'}
@@ -908,6 +973,21 @@ const Rewards: React.FC = () => {
       {surfaceMode === 'execute' && (
         <Stack spacing={2} sx={{ pb: 2 }}>
           <Tabs
+            value={selectedKidId}
+            onChange={(_event, value) => setSelectedKidId(value)}
+            variant="scrollable"
+            scrollButtons="auto"
+            sx={{
+              minHeight: 42,
+              '& .MuiTab-root': { minHeight: 42, textTransform: 'none', fontWeight: 700 },
+            }}
+          >
+            {availableKidTabs.map((kid) => (
+              <Tab key={kid.kidId} label={kid.kidName} value={kid.kidId} />
+            ))}
+          </Tabs>
+
+          <Tabs
             value={executeTab}
             onChange={(_event, value) => setExecuteTab(value)}
             variant="fullWidth"
@@ -916,109 +996,209 @@ const Rewards: React.FC = () => {
               '& .MuiTab-root': { minHeight: 40, textTransform: 'none', fontWeight: 600 },
             }}
           >
-            <Tab label="Levels" value="levels" />
-            <Tab label="This Week" value="current" />
-            <Tab label="Last Week" value="last" />
+            <Tab label="Tracking" value="tracking" />
+            <Tab label="Rewards" value="rewards" />
+            <Tab label="Archive" value="archive" />
           </Tabs>
 
-          {executeTab === 'levels' && (
+          {executeTab === 'tracking' && (
             <>
-              {visibleCurrentKids.length === 0 ? (
+              {!selectedCurrentRecord ? (
                 <Alert severity="info">Instantiate the first week to start tracking rewards.</Alert>
               ) : (
-                visibleCurrentKids.map((record) => {
+                (() => {
+                  const record = selectedCurrentRecord;
                   const accent = getKidAccent(record.kidId);
                   const syncState = syncStatusByRecordId[record.id];
+                  const draft = trackingDrafts[record.id] || { delta: 0, reason: '' };
+                  const isFrozen = Boolean(record.frozenAt);
+
                   return (
-                    <Card
-                      key={record.id}
-                      sx={{
-                        borderRadius: 4,
-                        overflow: 'hidden',
-                        border: '1px solid',
-                        borderColor: accent.softBorder,
-                        background: `linear-gradient(180deg, ${accent.soft} 0%, rgba(255,255,255,0.98) 88%)`,
-                      }}
-                    >
-                      <CardContent sx={{ p: 2 }}>
-                        <Stack spacing={1.75}>
-                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1 }}>
-                            <Box>
-                              <Typography variant="h6" sx={{ color: accent.text }}>
-                                {record.kidName}
-                              </Typography>
-                              <Typography variant="body2" color="text.secondary">
-                                Level {record.currentLevel + 1} · Step {record.currentStep}/
-                                {record.levels[record.currentLevel]?.stepCount || 1}
-                              </Typography>
+                    <Stack spacing={2}>
+                      <Card
+                        sx={{
+                          borderRadius: 4,
+                          overflow: 'hidden',
+                          border: '1px solid',
+                          borderColor: accent.softBorder,
+                          background: `linear-gradient(180deg, ${accent.soft} 0%, rgba(255,255,255,0.98) 88%)`,
+                        }}
+                      >
+                        <CardContent sx={{ p: 2 }}>
+                          <Stack spacing={1.75}>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1 }}>
+                              <Box>
+                                <Typography variant="h6" sx={{ color: accent.text }}>
+                                  {record.kidName}
+                                </Typography>
+                                <Typography variant="body2" color="text.secondary">
+                                  Level {record.currentLevel + 1} · Step {record.currentStep}/
+                                  {record.levels[record.currentLevel]?.stepCount || 1}
+                                </Typography>
+                              </Box>
+                              <Stack direction="row" spacing={1}>
+                                {isFrozen ? <Chip size="small" label="Frozen" variant="outlined" /> : null}
+                                <Chip
+                                  size="small"
+                                  icon={getSyncIcon(syncState)}
+                                  label={getSyncLabel(syncState)}
+                                  sx={{
+                                    backgroundColor: syncState === 'error' ? 'rgba(211,47,47,0.08)' : accent.soft,
+                                    color: syncState === 'error' ? 'error.main' : accent.text,
+                                  }}
+                                />
+                              </Stack>
                             </Box>
-                            <Chip
-                              size="small"
-                              icon={getSyncIcon(syncState)}
-                              label={getSyncLabel(syncState)}
-                              sx={{
-                                backgroundColor: syncState === 'error' ? 'rgba(211,47,47,0.08)' : accent.soft,
-                                color: syncState === 'error' ? 'error.main' : accent.text,
-                              }}
+                            <LevelTower
+                              levels={record.levels}
+                              currentLevel={record.currentLevel}
+                              currentStep={record.currentStep}
+                              accent={accent}
                             />
-                          </Box>
-                          <LevelTower
-                            levels={record.levels}
-                            currentLevel={record.currentLevel}
-                            currentStep={record.currentStep}
-                            accent={accent}
-                          />
-                          <Stack direction="row" spacing={1.25}>
-                            <Button
+                          </Stack>
+                        </CardContent>
+                      </Card>
+
+                      <Card sx={{ borderRadius: 4, border: '1px solid', borderColor: accent.softBorder }}>
+                        <CardContent sx={{ p: 2 }}>
+                          <Stack spacing={1.5}>
+                            <Typography variant="subtitle2">Adjust Tracking</Typography>
+                            <Stack direction="row" spacing={1} alignItems="center">
+                              <Button
+                                variant="outlined"
+                                disabled={isFrozen}
+                                onClick={() =>
+                                  setTrackingDrafts((previous) => ({
+                                    ...previous,
+                                    [record.id]: {
+                                      ...draft,
+                                      delta: draft.delta - 1,
+                                    },
+                                  }))
+                                }
+                              >
+                                -
+                              </Button>
+                              <Chip
+                                label={draft.delta === 0 ? '0' : formatTrackingDelta(draft.delta)}
+                                color={draft.delta > 0 ? 'success' : draft.delta < 0 ? 'warning' : 'default'}
+                                sx={{ minWidth: 76, justifyContent: 'center' }}
+                              />
+                              <Button
+                                variant="contained"
+                                disabled={isFrozen}
+                                onClick={() =>
+                                  setTrackingDrafts((previous) => ({
+                                    ...previous,
+                                    [record.id]: {
+                                      ...draft,
+                                      delta: draft.delta + 1,
+                                    },
+                                  }))
+                                }
+                                sx={{ backgroundColor: accent.solid, '&:hover': { backgroundColor: accent.solid } }}
+                              >
+                                +
+                              </Button>
+                            </Stack>
+                            <TextField
+                              size="small"
                               fullWidth
-                              variant="outlined"
-                              onClick={() => void changeKidStep(record.id, -1)}
-                              sx={{
-                                py: 1,
-                                minWidth: 0,
-                                borderRadius: 3,
-                                borderColor: accent.softBorder,
-                                color: accent.text,
-                                backgroundColor: '#fff',
-                                fontSize: 22,
-                                fontWeight: 800,
-                              }}
-                            >
-                              -
-                            </Button>
+                              disabled={isFrozen}
+                              label="Reason (optional)"
+                              value={draft.reason}
+                              onChange={(event) =>
+                                setTrackingDrafts((previous) => ({
+                                  ...previous,
+                                  [record.id]: {
+                                    ...draft,
+                                    reason: event.target.value,
+                                  },
+                                }))
+                              }
+                            />
                             <Button
-                              fullWidth
                               variant="contained"
-                              onClick={() => void changeKidStep(record.id, 1)}
-                              sx={{
-                                py: 1,
-                                minWidth: 0,
-                                borderRadius: 3,
-                                backgroundColor: accent.solid,
-                                boxShadow: `0 14px 20px ${accent.softBorder}`,
-                                fontSize: 22,
-                                fontWeight: 800,
-                                '&:hover': { backgroundColor: accent.solid },
+                              disabled={isFrozen || draft.delta === 0}
+                              onClick={() => {
+                                void (async () => {
+                                  const committed = await commitTrackingChange(record.id, draft.delta, draft.reason);
+                                  if (committed) {
+                                    setTrackingDrafts((previous) => ({
+                                      ...previous,
+                                      [record.id]: { delta: 0, reason: '' },
+                                    }));
+                                  }
+                                })();
                               }}
                             >
-                              +
+                              Commit
                             </Button>
                           </Stack>
-                        </Stack>
-                      </CardContent>
-                    </Card>
+                        </CardContent>
+                      </Card>
+
+                      <Card sx={{ borderRadius: 4, border: '1px solid', borderColor: accent.softBorder }}>
+                        <CardContent sx={{ p: 2 }}>
+                          <Stack spacing={1.25}>
+                            <Typography variant="subtitle2">Tracking Log</Typography>
+                            {record.notes.length === 0 ? (
+                              <Typography variant="body2" color="text.secondary">
+                                No tracking entries yet.
+                              </Typography>
+                            ) : (
+                              record.notes.map((note) => (
+                                <Box
+                                  key={note.id}
+                                  sx={{
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    alignItems: 'flex-start',
+                                    gap: 1,
+                                    py: 1,
+                                    borderTop: '1px solid',
+                                    borderColor: 'divider',
+                                  }}
+                                >
+                                  <Box sx={{ minWidth: 0 }}>
+                                    <Stack direction="row" spacing={0.75} useFlexGap flexWrap="wrap" alignItems="center">
+                                      {note.delta !== undefined ? (
+                                        <Chip
+                                          size="small"
+                                          color={note.delta > 0 ? 'success' : 'warning'}
+                                          label={formatTrackingDelta(note.delta)}
+                                        />
+                                      ) : null}
+                                      <Typography variant="body2">{note.text}</Typography>
+                                    </Stack>
+                                  </Box>
+                                  <IconButton
+                                    size="small"
+                                    disabled={isFrozen}
+                                    onClick={() => void removeTrackingEntry(record.id, note.id)}
+                                  >
+                                    <DeleteIcon fontSize="small" />
+                                  </IconButton>
+                                </Box>
+                              ))
+                            )}
+                          </Stack>
+                        </CardContent>
+                      </Card>
+                    </Stack>
                   );
-                })
+                })()
               )}
             </>
           )}
 
-          {executeTab === 'current' && (
+          {executeTab === 'rewards' && (
             <>
-              {visibleCurrentKids.length === 0 ? (
+              {!selectedCurrentRecord ? (
                 <Alert severity="info">Instantiate the first week to start tracking rewards.</Alert>
               ) : (
-                visibleCurrentKids.map((record) => {
+                (() => {
+                  const record = selectedCurrentRecord;
                   const accent = getKidAccent(record.kidId);
                   return (
                     <Card key={record.id} sx={{ borderRadius: 4, border: '1px solid', borderColor: accent.softBorder }}>
@@ -1093,121 +1273,147 @@ const Rewards: React.FC = () => {
                               </Stack>
                             )}
                           </Box>
-
-                          <Divider />
-
-                          <Box>
-                            <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                              Notes
-                            </Typography>
-                            <Stack direction="row" spacing={1} sx={{ mb: 1 }}>
-                              <TextField
-                                size="small"
-                                fullWidth
-                                placeholder="Log something good or bad"
-                                value={noteDrafts[record.id] || ''}
-                                onChange={(event) =>
-                                  setNoteDrafts((previous) => ({
-                                    ...previous,
-                                    [record.id]: event.target.value,
-                                  }))
-                                }
-                              />
-                              <Button
-                                size="small"
-                                color="success"
-                                onClick={() => {
-                                  const text = (noteDrafts[record.id] || '').trim();
-                                  if (!text) return;
-                                  void addNote(record.id, 'good', text);
-                                  setNoteDrafts((previous) => ({ ...previous, [record.id]: '' }));
-                                }}
-                              >
-                                Good
-                              </Button>
-                              <Button
-                                size="small"
-                                color="warning"
-                                onClick={() => {
-                                  const text = (noteDrafts[record.id] || '').trim();
-                                  if (!text) return;
-                                  void addNote(record.id, 'bad', text);
-                                  setNoteDrafts((previous) => ({ ...previous, [record.id]: '' }));
-                                }}
-                              >
-                                Bad
-                              </Button>
-                            </Stack>
-                            {record.notes.length === 0 ? (
-                              <Chip size="small" variant="outlined" label="No notes yet" />
-                            ) : (
-                              <Stack spacing={0.75}>
-                                {record.notes.map((note: RewardNote) => (
-                                  <Chip
-                                    key={note.id}
-                                    size="small"
-                                    color={note.type === 'good' ? 'success' : 'warning'}
-                                    variant="outlined"
-                                    label={`${note.type === 'good' ? 'Good' : 'Bad'} · ${note.text}`}
-                                    sx={{ justifyContent: 'flex-start' }}
-                                  />
-                                ))}
-                              </Stack>
-                            )}
-                          </Box>
                         </Stack>
                       </CardContent>
                     </Card>
                   );
-                })
+                })()
               )}
             </>
           )}
 
-          {executeTab === 'last' && (
+          {executeTab === 'archive' && (
             <>
-              {visibleRewardSourceKids.length === 0 ? (
-                <Alert severity="info">Freeze a week to open its rewards for use in the following week.</Alert>
+              {archiveWeekOptions.length === 0 ? (
+                <Alert severity="info">Previous weeks will appear here once you move to the next week.</Alert>
               ) : (
-                visibleRewardSourceKids.map((record) => {
-                  const accent = getKidAccent(record.kidId);
-                  const levelRewards = record.earnedRewards.filter((reward) => reward.source === 'level');
-                  const manualRewards = record.earnedRewards.filter((reward) => reward.source === 'manual');
-                  const carryForwardRewards = record.earnedRewards.filter((reward) => reward.source === 'carry_forward');
-                  return (
-                    <Card key={record.id} sx={{ borderRadius: 4, border: '1px solid', borderColor: accent.softBorder }}>
-                      <CardContent sx={{ p: 2 }}>
-                        <Stack spacing={2}>
-                          <Box>
-                            <Typography variant="h6" sx={{ color: accent.text }}>
-                              {record.kidName}
-                            </Typography>
-                            <Typography variant="body2" color="text.secondary">
-                              Rewards from week {record.weekOrder + 1}
-                            </Typography>
-                          </Box>
-                          {record.earnedRewards.length === 0 ? (
-                            <Typography variant="body2" color="text.secondary">
-                              No rewards available.
-                            </Typography>
-                          ) : (
+                <>
+                  <FormControl size="small" fullWidth>
+                    <InputLabel id="archive-week-label">Week</InputLabel>
+                    <Select
+                      labelId="archive-week-label"
+                      label="Week"
+                      value={archiveWeekOrder}
+                      onChange={(event) => setArchiveWeekOrder(Number(event.target.value))}
+                    >
+                      {archiveWeekOptions.map((group) => (
+                        <MenuItem key={group.weekOrder} value={group.weekOrder}>
+                          {`W${group.weekOrder + 1}`}
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+
+                  {!selectedArchiveRecord ? (
+                    <Alert severity="info">No archived data for this kid in the selected week.</Alert>
+                  ) : (() => {
+                    const record = selectedArchiveRecord;
+                    const accent = getKidAccent(record.kidId);
+                    const levelRewards = record.earnedRewards.filter((reward) => reward.source === 'level');
+                    const manualRewards = record.earnedRewards.filter((reward) => reward.source === 'manual');
+                    const carryForwardRewards = record.earnedRewards.filter((reward) => reward.source === 'carry_forward');
+                    return (
+                      <Stack spacing={2}>
+                        <Card
+                          sx={{
+                            borderRadius: 4,
+                            overflow: 'hidden',
+                            border: '1px solid',
+                            borderColor: accent.softBorder,
+                            background: `linear-gradient(180deg, ${accent.soft} 0%, rgba(255,255,255,0.98) 88%)`,
+                          }}
+                        >
+                          <CardContent sx={{ p: 2 }}>
+                            <Stack spacing={1.5}>
+                              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <Box>
+                                  <Typography variant="h6" sx={{ color: accent.text }}>
+                                    {record.kidName}
+                                  </Typography>
+                                  <Typography variant="body2" color="text.secondary">
+                                    Archived week {record.weekOrder + 1}
+                                  </Typography>
+                                </Box>
+                                <Chip size="small" label={record.frozenAt ? 'Frozen' : 'Open'} variant="outlined" />
+                              </Box>
+                              <Typography variant="body2" color="text.secondary">
+                                Level {record.currentLevel + 1} · Step {record.currentStep}/
+                                {record.levels[record.currentLevel]?.stepCount || 1}
+                              </Typography>
+                              <LevelTower
+                                levels={record.levels}
+                                currentLevel={record.currentLevel}
+                                currentStep={record.currentStep}
+                                accent={accent}
+                              />
+                            </Stack>
+                          </CardContent>
+                        </Card>
+
+                        <Card key={record.id} sx={{ borderRadius: 4, border: '1px solid', borderColor: accent.softBorder }}>
+                          <CardContent sx={{ p: 2 }}>
                             <Stack spacing={2}>
-                              {renderRewardSection('Level Rewards', levelRewards, record.id, 'No level rewards available.')}
-                              {renderRewardSection('Manual Rewards', manualRewards, record.id, 'No manual rewards available.')}
-                              {renderRewardSection(
-                                'Carry Forward',
-                                carryForwardRewards,
-                                record.id,
-                                'No carry-forward rewards available.',
-                                { showCarryForwardLabel: true },
+                              <Typography variant="subtitle2">Tracking Log</Typography>
+                              {record.notes.length === 0 ? (
+                                <Typography variant="body2" color="text.secondary">
+                                  No tracking entries for this week.
+                                </Typography>
+                              ) : (
+                                record.notes.map((note) => (
+                                  <Box
+                                    key={note.id}
+                                    sx={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: 1,
+                                      py: 1,
+                                      borderTop: '1px solid',
+                                      borderColor: 'divider',
+                                    }}
+                                  >
+                                    {note.delta !== undefined ? (
+                                      <Chip
+                                        size="small"
+                                        color={note.delta > 0 ? 'success' : 'warning'}
+                                        label={formatTrackingDelta(note.delta)}
+                                      />
+                                    ) : null}
+                                    <Typography variant="body2">{note.text}</Typography>
+                                  </Box>
+                                ))
                               )}
                             </Stack>
-                          )}
-                        </Stack>
-                      </CardContent>
-                    </Card>
-                  );
-                })
+                          </CardContent>
+                        </Card>
+
+                        <Card key={`${record.id}-rewards`} sx={{ borderRadius: 4, border: '1px solid', borderColor: accent.softBorder }}>
+                          <CardContent sx={{ p: 2 }}>
+                            <Stack spacing={2}>
+                              <Typography variant="subtitle2">Rewards</Typography>
+                              {record.earnedRewards.length === 0 ? (
+                                <Typography variant="body2" color="text.secondary">
+                                  No rewards available.
+                                </Typography>
+                              ) : (
+                                <Stack spacing={2}>
+                                  {renderRewardSection('Level Rewards', levelRewards, record.id, 'No level rewards available.')}
+                                  {renderRewardSection('Manual Rewards', manualRewards, record.id, 'No manual rewards available.')}
+                                  {renderRewardSection(
+                                    'Carry Forward',
+                                    carryForwardRewards,
+                                    record.id,
+                                    'No carry-forward rewards available.',
+                                    { showCarryForwardLabel: true },
+                                  )}
+                                </Stack>
+                              )}
+                            </Stack>
+                          </CardContent>
+                        </Card>
+                      </Stack>
+                    );
+                  })()}
+                </>
               )}
             </>
           )}
@@ -1717,7 +1923,7 @@ const Rewards: React.FC = () => {
               void resetProgress();
               setResetOpen(false);
               setSurfaceMode('execute');
-              setExecuteTab('levels');
+              setExecuteTab('tracking');
             }}
           >
             Reset

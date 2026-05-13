@@ -2,9 +2,11 @@ import {
   adjustRewardQuantity,
   addManualRewardToWeek,
   addRewardWeekNote,
+  applyRewardTrackingChange,
   consumeSingleRewardUnit,
   createDefaultRewardsTemplate,
   canUnfreezeRewardWeek,
+  deleteRewardWeekNote,
   freezeRewardWeek,
   getRewardWeekGroups,
   getRewardWeekRecords,
@@ -204,6 +206,25 @@ describe('rewardServices', () => {
     });
     const restoredReward = restored.earnedRewards.find((reward) => reward.id === stickerReward.id)!;
     expect(restoredReward.remainingQuantity).toBe(stickerReward.remainingQuantity);
+  });
+
+  it('commits tracking changes with log entries and allows deleting them', async () => {
+    const template = await buildTemplate();
+    const [record] = await instantiateNextRewardWeek(template);
+
+    const updatedRecord = await applyRewardTrackingChange(record.id, 2, 'Helped without being asked');
+    expect(updatedRecord.currentLevel).toBe(1);
+    expect(updatedRecord.currentStep).toBe(1);
+    expect(updatedRecord.notes[0]).toEqual(
+      expect.objectContaining({
+        type: 'adjustment',
+        text: 'Helped without being asked',
+        delta: 2,
+      }),
+    );
+
+    const afterDelete = await deleteRewardWeekNote(record.id, updatedRecord.notes[0].id);
+    expect(afterDelete.notes).toHaveLength(0);
   });
 
   it('includes manual rewards in freeze output without merging them into level rewards', async () => {

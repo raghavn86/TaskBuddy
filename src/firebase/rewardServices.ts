@@ -440,6 +440,87 @@ export const addRewardWeekNote = async (
   return updatedRecord;
 };
 
+export const applyRewardTrackingChange = async (
+  recordId: string,
+  delta: number,
+  reason?: string,
+  expectation?: StepExpectation,
+): Promise<RewardWeekKidRecord> => {
+  const recordRef = firestoreService.doc(rewardWeekKidsCollection, recordId);
+
+  return firestoreService.runTransaction(async (transaction: any) => {
+    const snap = await transaction.get(recordRef);
+    if (!snap.exists()) {
+      throw new Error('Reward week record not found');
+    }
+
+    const record = normalizeWeekRecord(snap.data() as RewardWeekKidRecord);
+    if (record.frozenAt) {
+      throw new Error('Frozen tracking cannot be changed');
+    }
+    if (
+      expectation &&
+      (record.currentLevel !== expectation.currentLevel ||
+        record.currentStep !== expectation.currentStep ||
+        (expectation.updatedAt !== undefined && record.updatedAt !== expectation.updatedAt))
+    ) {
+      throw new Error('Reward week record changed before update completed');
+    }
+
+    const safeDelta = delta > 0 ? Math.floor(delta) : Math.ceil(delta);
+    if (safeDelta === 0) {
+      throw new Error('Tracking change must not be zero');
+    }
+
+    const { currentLevel, currentStep } = applyStepDelta(record, safeDelta);
+    const now = Date.now();
+    const entryText = reason?.trim() || (safeDelta > 0 ? 'Step increase' : 'Step decrease');
+    const updatedRecord: RewardWeekKidRecord = {
+      ...record,
+      currentLevel,
+      currentStep,
+      notes: [
+        {
+          id: createId(),
+          type: 'adjustment',
+          text: entryText,
+          createdAt: now,
+          delta: safeDelta,
+        },
+        ...record.notes,
+      ],
+      updatedAt: now,
+    };
+
+    transaction.update(recordRef, updatedRecord);
+    return updatedRecord;
+  }) as Promise<RewardWeekKidRecord>;
+};
+
+export const deleteRewardWeekNote = async (
+  recordId: string,
+  noteId: string,
+): Promise<RewardWeekKidRecord> => {
+  const snap = await firestoreService.getDoc(firestoreService.doc(rewardWeekKidsCollection, recordId));
+  if (!snap.exists()) {
+    throw new Error('Reward week record not found');
+  }
+
+  const record = normalizeWeekRecord(snap.data() as RewardWeekKidRecord);
+  if (record.frozenAt) {
+    throw new Error('Frozen tracking cannot be changed');
+  }
+
+  const updatedRecord: RewardWeekKidRecord = {
+    ...record,
+    notes: record.notes.filter((note) => note.id !== noteId),
+    updatedAt: Date.now(),
+  };
+
+  await firestoreService.setDoc(firestoreService.doc(rewardWeekKidsCollection, recordId), updatedRecord);
+  return updatedRecord;
+};
+
 export const addManualRewardToWeek = async (
   recordId: string,
   reward: RewardDefinition,

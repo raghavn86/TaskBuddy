@@ -14,11 +14,13 @@ import {
   adjustRewardQuantity,
   addManualRewardToWeek,
   addRewardWeekNote,
+  applyRewardTrackingChange,
   applyKidStepDelta,
   canFreezeRewardWeek,
   canUnfreezeRewardWeek,
   consumeSingleRewardUnit,
   createDefaultRewardsTemplate,
+  deleteRewardWeekNote,
   freezeRewardWeek,
   getRewardWeekGroups,
   getRewardsTemplate,
@@ -63,6 +65,8 @@ type RewardsContextType = {
   unfreezeCurrentWeek: () => Promise<void>;
   openCurrentNextWeek: (carryForwardLevel: boolean) => Promise<void>;
   changeKidStep: (recordId: string, delta: 1 | -1) => Promise<void>;
+  commitTrackingChange: (recordId: string, delta: number, reason?: string) => Promise<boolean>;
+  removeTrackingEntry: (recordId: string, noteId: string) => Promise<void>;
   addNote: (recordId: string, type: 'good' | 'bad', text: string) => Promise<void>;
   addManualReward: (recordId: string, reward: RewardDefinition) => Promise<void>;
   consumeReward: (recordId: string, rewardId: string) => Promise<void>;
@@ -505,6 +509,47 @@ export const RewardsProvider: React.FC<{ children: React.ReactNode }> = ({ child
     [replaceRecord],
   );
 
+  const commitTrackingChange = useCallback(
+    async (recordId: string, delta: number, reason?: string) => {
+      const existingRecord = weekGroups.flatMap((group) => group.kids).find((record) => record.id === recordId);
+      if (!existingRecord) {
+        return false;
+      }
+
+      try {
+        markSyncState(recordId, 'pending');
+        const updatedRecord = await applyRewardTrackingChange(recordId, delta, reason, {
+          currentLevel: existingRecord.currentLevel,
+          currentStep: existingRecord.currentStep,
+          updatedAt: existingRecord.updatedAt,
+        });
+        replaceRecord(updatedRecord);
+        markSyncState(recordId, 'synced');
+        return true;
+      } catch (err) {
+        console.error('Failed to commit tracking change', err);
+        markSyncState(recordId, 'error');
+        setError(err instanceof Error ? err.message : 'Failed to commit tracking change');
+        await loadRewardsData();
+        return false;
+      }
+    },
+    [loadRewardsData, markSyncState, replaceRecord, weekGroups],
+  );
+
+  const removeTrackingEntry = useCallback(
+    async (recordId: string, noteId: string) => {
+      try {
+        const updatedRecord = await deleteRewardWeekNote(recordId, noteId);
+        replaceRecord(updatedRecord);
+      } catch (err) {
+        console.error('Failed to remove tracking entry', err);
+        setError(err instanceof Error ? err.message : 'Failed to remove tracking entry');
+      }
+    },
+    [replaceRecord],
+  );
+
   const addManualReward = useCallback(
     async (recordId: string, reward: RewardDefinition) => {
       try {
@@ -662,6 +707,8 @@ export const RewardsProvider: React.FC<{ children: React.ReactNode }> = ({ child
     unfreezeCurrentWeek,
     openCurrentNextWeek,
     changeKidStep,
+    commitTrackingChange,
+    removeTrackingEntry,
     addNote,
     addManualReward,
     consumeReward,
